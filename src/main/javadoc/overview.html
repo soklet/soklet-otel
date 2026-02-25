@@ -1,0 +1,28 @@
+<html>
+  <head></head>
+  <body>
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="https://cdn.soklet.com/soklet-gh-logo-dark-v2.png">
+      <img alt="Soklet" src="https://cdn.soklet.com/soklet-gh-logo-light-v2.png" width="150">
+    </picture>
+    <br/><br/>
+    This library provides OpenTelemetry integration for
+    <a href="https://www.soklet.com" target="_blank">Soklet</a> by supplying
+    <a href="https://otel.javadoc.soklet.com/com/soklet/otel/OpenTelemetryMetricsCollector.html"><code>OpenTelemetryMetricsCollector</code></a>,
+    an implementation of
+    <a href="https://javadoc.soklet.com/com/soklet/MetricsCollector.html"><code>MetricsCollector</code></a>.
+    <br/><br/>
+    Wire it into
+    <a href="https://javadoc.soklet.com/com/soklet/SokletConfig.html"><code>SokletConfig</code></a>
+    via <code>.metricsCollector(...)</code> using either an
+    <a href="https://javadoc.io/doc/io.opentelemetry/opentelemetry-api/1.59.0/io/opentelemetry/api/OpenTelemetry.html"><code>OpenTelemetry</code></a>
+    or
+    <a href="https://javadoc.io/doc/io.opentelemetry/opentelemetry-api/1.59.0/io/opentelemetry/api/metrics/Meter.html"><code>Meter</code></a>
+    instance.
+    <br/><br/>
+    By default, standard HTTP metrics use OpenTelemetry Semantic Convention names, while Soklet-specific metrics are emitted for concepts such as Server-Sent Events.
+    <br/><br/>
+    <strong>Please refer to the official documentation at <a href="https://www.soklet.com" target="_blank">https://www.soklet.com</a>.</strong>
+    <br/><br/>
+  </body>
+</html>

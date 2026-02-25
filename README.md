@@ -46,6 +46,7 @@ import com.soklet.Server;
 import com.soklet.otel.OpenTelemetryMetricsCollector;
 import io.opentelemetry.api.OpenTelemetry;
 
+// Acquire an OpenTelemetry instance
 OpenTelemetry openTelemetry = myOpenTelemetry();
 
 SokletConfig config = SokletConfig.withServer(
@@ -75,9 +76,8 @@ If you already have a
 wire directly:
 
 ```java
-OpenTelemetryMetricsCollector collector = OpenTelemetryMetricsCollector
-  .withMeter(myMeter)
-  .build();
+OpenTelemetryMetricsCollector collector = 
+  OpenTelemetryMetricsCollector.withMeter(myMeter).build();
 ```
 
 ## Emitted Metrics
