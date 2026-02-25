@@ -46,9 +46,10 @@ import com.soklet.Server;
 import com.soklet.otel.OpenTelemetryMetricsCollector;
 import io.opentelemetry.api.OpenTelemetry;
 
-// Acquire an OpenTelemetry instance
+// Acquire an OpenTelemetry instance from wherever you'd like...
 OpenTelemetry openTelemetry = myOpenTelemetry();
 
+// ...and use it to drive Soklet's OpenTelemetryMetricsCollector
 SokletConfig config = SokletConfig.withServer(
   Server.fromPort(8080)
 ).metricsCollector(
