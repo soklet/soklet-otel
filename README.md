@@ -16,7 +16,9 @@ This Soklet add-on library provides
 a production-oriented implementation of Soklet's
 [`MetricsCollector`](https://javadoc.soklet.com/com/soklet/MetricsCollector.html) interface.
 
-It records HTTP + SSE lifecycle telemetry into OpenTelemetry `Meter` instruments (counters, up-down counters,
+It records HTTP + SSE lifecycle telemetry into OpenTelemetry
+[`Meter`](https://javadoc.io/doc/io.opentelemetry/opentelemetry-api/1.59.0/io/opentelemetry/api/metrics/Meter.html)
+instruments (counters, up-down counters,
 and histograms), so your existing OTel pipeline/exporter stack can collect and ship metrics.
 
 Its only dependency other than [Soklet](https://www.soklet.com) is [opentelemetry-java](https://github.com/open-telemetry/opentelemetry-java) (the Java implementation of the OpenTelemetry API).
@@ -62,11 +64,15 @@ Related API references:
 
 - [`OpenTelemetryMetricsCollector`](https://otel.javadoc.soklet.com/com/soklet/otel/OpenTelemetryMetricsCollector.html)
 - [`OpenTelemetryMetricsCollector.MetricNamingStrategy`](https://otel.javadoc.soklet.com/com/soklet/otel/OpenTelemetryMetricsCollector.MetricNamingStrategy.html)
+- [`OpenTelemetry`](https://javadoc.io/doc/io.opentelemetry/opentelemetry-api/1.59.0/io/opentelemetry/api/OpenTelemetry.html)
+- [`Meter`](https://javadoc.io/doc/io.opentelemetry/opentelemetry-api/1.59.0/io/opentelemetry/api/metrics/Meter.html)
 - [`SokletConfig`](https://javadoc.soklet.com/com/soklet/SokletConfig.html)
 - [`Server`](https://javadoc.soklet.com/com/soklet/Server.html)
 - [`MetricsCollector`](https://javadoc.soklet.com/com/soklet/MetricsCollector.html)
 
-If you already have a `Meter`, wire directly:
+If you already have a
+[`Meter`](https://javadoc.io/doc/io.opentelemetry/opentelemetry-api/1.59.0/io/opentelemetry/api/metrics/Meter.html),
+wire directly:
 
 ```java
 OpenTelemetryMetricsCollector collector = OpenTelemetryMetricsCollector
