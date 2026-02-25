@@ -25,3 +25,6 @@ replay_pid*
 
 # IDE files
 .idea/
+
+# Maven build output
+target/

@@ -19,11 +19,34 @@
 		</license>
 	</licenses>
 
+	<developers>
+		<developer>
+			<name>Mark Allen</name>
+			<email>mark@revetware.com</email>
+			<organization>Revetware LLC</organization>
+			<organizationUrl>https://www.revetware.com</organizationUrl>
+		</developer>
+	</developers>
+
 	<scm>
 		<connection>scm:git:git@github.com:soklet/soklet-otel.git</connection>
 		<developerConnection>scm:git:git@github.com:soklet/soklet-otel.git</developerConnection>
 		<url>git@github.com:soklet/soklet-otel.git</url>
 	</scm>
+
+	<distributionManagement>
+		<repository>
+			<name>Central Portal Snapshots</name>
+			<id>central-portal-snapshots</id>
+			<url>https://central.sonatype.com/repository/maven-snapshots/</url>
+			<releases>
+				<enabled>false</enabled>
+			</releases>
+			<snapshots>
+				<enabled>true</enabled>
+			</snapshots>
+		</repository>
+	</distributionManagement>
 
 	<properties>
 		<project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
@@ -45,6 +68,8 @@
 						<arg>-parameters</arg>
 						<arg>-Xlint:unchecked</arg>
 					</compilerArgs>
+					<!-- Prevent accidental annotation-processor discovery during self-compilation -->
+					<proc>none</proc>
 					<showDeprecation>true</showDeprecation>
 					<showWarnings>true</showWarnings>
 				</configuration>
@@ -71,7 +96,7 @@
 				<configuration>
 					<links>
 						<link>https://docs.oracle.com/en/java/javase/25/docs/api/</link>
-						<link>https://javadoc.io/doc/com.soklet/soklet/${soklet.version}/</link>
+						<link>https://javadoc.soklet.com/</link>
 						<link>https://javadoc.io/doc/io.opentelemetry/opentelemetry-api/${opentelemetry.version}/</link>
 						<link>https://javadoc.io/doc/com.google.code.findbugs/jsr305/3.0.2/</link>
 						<link>https://javadoc.io/doc/org.jspecify/jspecify/1.0.0/</link>
@@ -87,6 +112,7 @@
 					</additionalOptions>
 					<linksource>true</linksource>
 					<show>public</show>
+					<bottom><![CDATA[Copyright 2026 <a href="https://www.revetware.com" target="_blank">Revetware LLC<a>.]]></bottom>
 					<source>17</source>
 					<failOnError>true</failOnError>
 				</configuration>
@@ -101,9 +127,40 @@
 			</plugin>
 
 			<plugin>
+				<groupId>org.sonatype.central</groupId>
+				<artifactId>central-publishing-maven-plugin</artifactId>
+				<version>0.8.0</version>
+				<extensions>true</extensions>
+				<configuration>
+					<publishingServerId>central-portal</publishingServerId>
+				</configuration>
+			</plugin>
+
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-gpg-plugin</artifactId>
+				<version>3.2.8</version>
+				<executions>
+					<execution>
+						<id>sign-artifacts</id>
+						<phase>verify</phase>
+						<goals>
+							<goal>sign</goal>
+						</goals>
+					</execution>
+				</executions>
+			</plugin>
+
+			<plugin>
 				<groupId>org.apache.maven.plugins</groupId>
 				<artifactId>maven-surefire-plugin</artifactId>
 				<version>3.5.4</version>
+				<configuration>
+					<includes>
+						<include>**/*Tests.java</include>
+					</includes>
+					<testFailureIgnore>false</testFailureIgnore>
+				</configuration>
 			</plugin>
 		</plugins>
 	</build>
@@ -113,6 +170,7 @@
 			<groupId>com.soklet</groupId>
 			<artifactId>soklet</artifactId>
 			<version>${soklet.version}</version>
+			<scope>provided</scope>
 		</dependency>
 
 		<dependency>
