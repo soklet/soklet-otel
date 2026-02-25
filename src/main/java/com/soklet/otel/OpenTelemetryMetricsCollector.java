@@ -59,7 +59,7 @@ import static java.util.Objects.requireNonNull;
  * By default, standard HTTP metrics use OpenTelemetry Semantic Convention names. Soklet-specific concepts
  * (for example SSE queue/drop/broadcast details) are emitted with {@code soklet.*} names.
  * <p>
- * See <a href="https://www.soklet.com">https://www.soklet.com</a> for Soklet documentation.
+ * See <a href="https://soklet.com/docs/metrics-collection">https://soklet.com/docs/metrics-collection</a> for Soklet's metrics/telemetry documentation.
  *
  * @author <a href="https://www.revetkn.com">Mark Allen</a>
  */
