@@ -19,6 +19,10 @@ a production-oriented implementation of Soklet's
 It records HTTP + SSE lifecycle telemetry into OpenTelemetry `Meter` instruments (counters, up-down counters,
 and histograms), so your existing OTel pipeline/exporter stack can collect and ship metrics.
 
+Its only dependency other than [Soklet](https://www.soklet.com) is [opentelemetry-java](https://github.com/open-telemetry/opentelemetry-java) (the Java implementation of the OpenTelemetry API).
+
+Like [Soklet](https://www.soklet.com), Java 17+ is required.
+
 ## Installation
 
 ```xml
