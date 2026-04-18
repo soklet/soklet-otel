@@ -31,7 +31,7 @@ Like [Soklet](https://www.soklet.com), Java 17+ is required.
 <dependency>
   <groupId>com.soklet</groupId>
   <artifactId>soklet-otel</artifactId>
-  <version>1.0.0</version>
+  <version>1.1.0</version>
 </dependency>
 ```
 
