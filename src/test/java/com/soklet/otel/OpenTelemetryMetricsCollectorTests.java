@@ -22,10 +22,10 @@ import com.soklet.MetricsCollector;
 import com.soklet.Request;
 import com.soklet.ResourceMethod;
 import com.soklet.ResourcePathDeclaration;
-import com.soklet.ServerSentEvent;
-import com.soklet.ServerSentEventComment;
-import com.soklet.ServerSentEventConnection;
 import com.soklet.ServerType;
+import com.soklet.SseComment;
+import com.soklet.SseConnection;
+import com.soklet.SseEvent;
 import io.opentelemetry.api.common.AttributeKey;
 import io.opentelemetry.api.common.Attributes;
 import io.opentelemetry.sdk.OpenTelemetrySdk;
@@ -115,35 +115,35 @@ public class OpenTelemetryMetricsCollectorTests {
 
 		ResourceMethod resourceMethod = createResourceMethod(HttpMethod.GET, "/chat", "chat");
 		Request request = Request.fromPath(HttpMethod.GET, "/chat");
-		TestServerSentEventConnection connection = new TestServerSentEventConnection(request, resourceMethod, Instant.now());
+		TestSseConnection connection = new TestSseConnection(request, resourceMethod, Instant.now());
 
-		collector.didEstablishServerSentEventConnection(connection);
-		collector.didWriteServerSentEvent(
+		collector.didEstablishSseConnection(connection);
+		collector.didWriteSseEvent(
 				connection,
-				ServerSentEvent.withEvent("message").data("hello").build(),
+				SseEvent.withEvent("message").data("hello").build(),
 				Duration.ofMillis(5),
 				Duration.ofMillis(2),
 				12,
 				0
 		);
-		collector.didDropServerSentEvent(
+		collector.didDropSseEvent(
 				connection,
-				ServerSentEvent.withEvent("message").data("dropped").build(),
-				MetricsCollector.ServerSentEventDropReason.QUEUE_FULL,
+				SseEvent.withEvent("message").data("dropped").build(),
+				MetricsCollector.SseEventDropReason.QUEUE_FULL,
 				7,
 				4
 		);
-		collector.didWriteServerSentEventComment(
+		collector.didWriteSseComment(
 				connection,
-				ServerSentEventComment.heartbeatInstance(),
+				SseComment.heartbeatInstance(),
 				Duration.ofMillis(1),
 				Duration.ofMillis(1),
 				0,
 				0
 		);
-		collector.didBroadcastServerSentEvent(ResourcePathDeclaration.fromPath("/chat"), 3, 2, 1);
-		collector.didTerminateServerSentEventConnection(connection, Duration.ofSeconds(3),
-				ServerSentEventConnection.TerminationReason.REMOTE_CLOSE, null);
+		collector.didBroadcastSseEvent(ResourcePathDeclaration.fromPath("/chat"), 3, 2, 1);
+		collector.didTerminateSseConnection(connection, Duration.ofSeconds(3),
+				SseConnection.TerminationReason.REMOTE_CLOSE, null);
 
 		Collection<MetricData> metrics = harness.metricReader().collectAllMetrics();
 
@@ -314,7 +314,7 @@ public class OpenTelemetryMetricsCollectorTests {
 		}
 	}
 
-	private static final class TestServerSentEventConnection implements ServerSentEventConnection {
+	private static final class TestSseConnection implements SseConnection {
 		@NonNull
 		private final Request request;
 		@NonNull
@@ -322,9 +322,9 @@ public class OpenTelemetryMetricsCollectorTests {
 		@NonNull
 		private final Instant establishedAt;
 
-		private TestServerSentEventConnection(@NonNull Request request,
-																					@NonNull ResourceMethod resourceMethod,
-																					@NonNull Instant establishedAt) {
+		private TestSseConnection(@NonNull Request request,
+															@NonNull ResourceMethod resourceMethod,
+															@NonNull Instant establishedAt) {
 			this.request = requireNonNull(request);
 			this.resourceMethod = requireNonNull(resourceMethod);
 			this.establishedAt = requireNonNull(establishedAt);

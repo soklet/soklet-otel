@@ -6,7 +6,7 @@
 
 	<groupId>com.soklet</groupId>
 	<artifactId>soklet-otel</artifactId>
-	<version>1.0.0</version>
+	<version>1.1.0-SNAPSHOT</version>
 	<packaging>jar</packaging>
 	<name>Soklet OpenTelemetry Integration</name>
 	<description>OpenTelemetry metrics integration for Soklet via a MetricsCollector implementation.</description>
@@ -51,7 +51,7 @@
 	<properties>
 		<project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
 		<project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
-		<soklet.version>2.0.2</soklet.version>
+		<soklet.version>3.0.0-SNAPSHOT</soklet.version>
 		<opentelemetry.version>1.59.0</opentelemetry.version>
 		<junit.version>5.13.3</junit.version>
 	</properties>
@@ -95,7 +95,7 @@
 				<version>3.12.0</version>
 				<configuration>
 					<links>
-						<link>https://docs.oracle.com/en/java/javase/25/docs/api/</link>
+						<link>https://docs.oracle.com/en/java/javase/26/docs/api/</link>
 						<link>https://javadoc.soklet.com/</link>
 						<link>https://javadoc.io/doc/io.opentelemetry/opentelemetry-api/${opentelemetry.version}/</link>
 						<link>https://javadoc.io/doc/com.google.code.findbugs/jsr305/3.0.2/</link>

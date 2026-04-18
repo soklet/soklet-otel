@@ -24,10 +24,10 @@ import com.soklet.RequestReadFailureReason;
 import com.soklet.RequestRejectionReason;
 import com.soklet.ResourceMethod;
 import com.soklet.ResourcePathDeclaration;
-import com.soklet.ServerSentEvent;
-import com.soklet.ServerSentEventComment;
-import com.soklet.ServerSentEventConnection;
 import com.soklet.ServerType;
+import com.soklet.SseComment;
+import com.soklet.SseConnection;
+import com.soklet.SseEvent;
 import io.opentelemetry.api.GlobalOpenTelemetry;
 import io.opentelemetry.api.OpenTelemetry;
 import io.opentelemetry.api.common.AttributeKey;
@@ -486,7 +486,7 @@ public final class OpenTelemetryMetricsCollector implements MetricsCollector {
 		this.activeRequestsCounter.add(-1, activeRequestAttributes(serverType, request));
 		this.requestDurationHistogram.record(seconds(duration), attributes);
 		this.requestBodySizeHistogram.record(request.getBody().map(body -> (long) body.length).orElse(0L), attributes);
-		this.responseBodySizeHistogram.record(marshaledResponse.getBody().map(body -> (long) body.length).orElse(0L), attributes);
+		this.responseBodySizeHistogram.record(marshaledResponse.getBodyLength(), attributes);
 
 		if (!throwables.isEmpty())
 			this.requestThrowableCounter.add(throwables.size(), attributes);
@@ -528,19 +528,19 @@ public final class OpenTelemetryMetricsCollector implements MetricsCollector {
 	}
 
 	@Override
-	public void didEstablishServerSentEventConnection(@NonNull ServerSentEventConnection serverSentEventConnection) {
-		requireNonNull(serverSentEventConnection);
+	public void didEstablishSseConnection(@NonNull SseConnection sseConnection) {
+		requireNonNull(sseConnection);
 
-		Attributes attributes = serverSentEventAttributes(serverSentEventConnection);
+		Attributes attributes = serverSentEventAttributes(sseConnection);
 		this.activeServerSentEventConnectionsCounter.add(1, attributes);
 		this.serverSentEventConnectionsEstablishedCounter.add(1, attributes);
 	}
 
 	@Override
-	public void didFailToEstablishServerSentEventConnection(@NonNull Request request,
-																													@Nullable ResourceMethod resourceMethod,
-																													ServerSentEventConnection.@NonNull HandshakeFailureReason reason,
-																													@Nullable Throwable throwable) {
+	public void didFailToEstablishSseConnection(@NonNull Request request,
+																							@Nullable ResourceMethod resourceMethod,
+																							SseConnection.@NonNull HandshakeFailureReason reason,
+																							@Nullable Throwable throwable) {
 		requireNonNull(request);
 		requireNonNull(reason);
 
@@ -554,15 +554,15 @@ public final class OpenTelemetryMetricsCollector implements MetricsCollector {
 	}
 
 	@Override
-	public void didTerminateServerSentEventConnection(@NonNull ServerSentEventConnection serverSentEventConnection,
-																										@NonNull Duration connectionDuration,
-																										ServerSentEventConnection.@NonNull TerminationReason terminationReason,
-																										@Nullable Throwable throwable) {
-		requireNonNull(serverSentEventConnection);
+	public void didTerminateSseConnection(@NonNull SseConnection sseConnection,
+																				@NonNull Duration connectionDuration,
+																				SseConnection.@NonNull TerminationReason terminationReason,
+																				@Nullable Throwable throwable) {
+		requireNonNull(sseConnection);
 		requireNonNull(connectionDuration);
 		requireNonNull(terminationReason);
 
-		Attributes routeAttributes = serverSentEventAttributes(serverSentEventConnection);
+		Attributes routeAttributes = serverSentEventAttributes(sseConnection);
 		Attributes durationAttributes = Attributes.builder()
 				.putAll(routeAttributes)
 				.put(SSE_TERMINATION_REASON_ATTRIBUTE_KEY, enumValue(terminationReason))
@@ -574,17 +574,17 @@ public final class OpenTelemetryMetricsCollector implements MetricsCollector {
 	}
 
 	@Override
-	public void didWriteServerSentEvent(@NonNull ServerSentEventConnection serverSentEventConnection,
-																			@NonNull ServerSentEvent serverSentEvent,
-																			@NonNull Duration writeDuration,
-																			@Nullable Duration deliveryLag,
-																			@Nullable Integer payloadBytes,
-																			@Nullable Integer queueDepth) {
-		requireNonNull(serverSentEventConnection);
-		requireNonNull(serverSentEvent);
+	public void didWriteSseEvent(@NonNull SseConnection sseConnection,
+															 @NonNull SseEvent sseEvent,
+															 @NonNull Duration writeDuration,
+															 @Nullable Duration deliveryLag,
+															 @Nullable Integer payloadBytes,
+															 @Nullable Integer queueDepth) {
+		requireNonNull(sseConnection);
+		requireNonNull(sseEvent);
 		requireNonNull(writeDuration);
 
-		Attributes attributes = serverSentEventAttributes(serverSentEventConnection);
+		Attributes attributes = serverSentEventAttributes(sseConnection);
 		this.serverSentEventWrittenCounter.add(1, attributes);
 		this.serverSentEventWriteDurationHistogram.record(seconds(writeDuration), attributes);
 
@@ -597,19 +597,19 @@ public final class OpenTelemetryMetricsCollector implements MetricsCollector {
 	}
 
 	@Override
-	public void didFailToWriteServerSentEvent(@NonNull ServerSentEventConnection serverSentEventConnection,
-																						@NonNull ServerSentEvent serverSentEvent,
-																						@NonNull Duration writeDuration,
-																						@NonNull Throwable throwable,
-																						@Nullable Duration deliveryLag,
-																						@Nullable Integer payloadBytes,
-																						@Nullable Integer queueDepth) {
-		requireNonNull(serverSentEventConnection);
-		requireNonNull(serverSentEvent);
+	public void didFailToWriteSseEvent(@NonNull SseConnection sseConnection,
+																		 @NonNull SseEvent sseEvent,
+																		 @NonNull Duration writeDuration,
+																		 @NonNull Throwable throwable,
+																		 @Nullable Duration deliveryLag,
+																		 @Nullable Integer payloadBytes,
+																		 @Nullable Integer queueDepth) {
+		requireNonNull(sseConnection);
+		requireNonNull(sseEvent);
 		requireNonNull(writeDuration);
 		requireNonNull(throwable);
 
-		Attributes attributes = serverSentEventAttributes(serverSentEventConnection);
+		Attributes attributes = serverSentEventAttributes(sseConnection);
 		this.serverSentEventWriteFailureCounter.add(1, attributes);
 		this.serverSentEventWriteDurationHistogram.record(seconds(writeDuration), attributes);
 
@@ -622,17 +622,17 @@ public final class OpenTelemetryMetricsCollector implements MetricsCollector {
 	}
 
 	@Override
-	public void didDropServerSentEvent(@NonNull ServerSentEventConnection serverSentEventConnection,
-																		 @NonNull ServerSentEvent serverSentEvent,
-																		 @NonNull ServerSentEventDropReason reason,
-																		 @Nullable Integer payloadBytes,
-																		 @Nullable Integer queueDepth) {
-		requireNonNull(serverSentEventConnection);
-		requireNonNull(serverSentEvent);
+	public void didDropSseEvent(@NonNull SseConnection sseConnection,
+															@NonNull SseEvent sseEvent,
+															@NonNull SseEventDropReason reason,
+															@Nullable Integer payloadBytes,
+															@Nullable Integer queueDepth) {
+		requireNonNull(sseConnection);
+		requireNonNull(sseEvent);
 		requireNonNull(reason);
 
 		Attributes attributes = Attributes.builder()
-				.putAll(serverSentEventAttributes(serverSentEventConnection))
+				.putAll(serverSentEventAttributes(sseConnection))
 				.put(SSE_DROP_REASON_ATTRIBUTE_KEY, enumValue(reason))
 				.build();
 		this.serverSentEventDropCounter.add(1, attributes);
@@ -644,17 +644,17 @@ public final class OpenTelemetryMetricsCollector implements MetricsCollector {
 	}
 
 	@Override
-	public void didWriteServerSentEventComment(@NonNull ServerSentEventConnection serverSentEventConnection,
-																						 @NonNull ServerSentEventComment serverSentEventComment,
-																						 @NonNull Duration writeDuration,
-																						 @Nullable Duration deliveryLag,
-																						 @Nullable Integer payloadBytes,
-																						 @Nullable Integer queueDepth) {
-		requireNonNull(serverSentEventConnection);
-		requireNonNull(serverSentEventComment);
+	public void didWriteSseComment(@NonNull SseConnection sseConnection,
+																 @NonNull SseComment sseComment,
+																 @NonNull Duration writeDuration,
+																 @Nullable Duration deliveryLag,
+																 @Nullable Integer payloadBytes,
+																 @Nullable Integer queueDepth) {
+		requireNonNull(sseConnection);
+		requireNonNull(sseComment);
 		requireNonNull(writeDuration);
 
-		Attributes attributes = serverSentEventCommentAttributes(serverSentEventConnection, serverSentEventComment.getCommentType());
+		Attributes attributes = serverSentEventCommentAttributes(sseConnection, sseComment.getCommentType());
 		this.serverSentEventCommentWrittenCounter.add(1, attributes);
 		this.serverSentEventCommentWriteDurationHistogram.record(seconds(writeDuration), attributes);
 
@@ -667,19 +667,19 @@ public final class OpenTelemetryMetricsCollector implements MetricsCollector {
 	}
 
 	@Override
-	public void didFailToWriteServerSentEventComment(@NonNull ServerSentEventConnection serverSentEventConnection,
-																									 @NonNull ServerSentEventComment serverSentEventComment,
-																									 @NonNull Duration writeDuration,
-																									 @NonNull Throwable throwable,
-																									 @Nullable Duration deliveryLag,
-																									 @Nullable Integer payloadBytes,
-																									 @Nullable Integer queueDepth) {
-		requireNonNull(serverSentEventConnection);
-		requireNonNull(serverSentEventComment);
+	public void didFailToWriteSseComment(@NonNull SseConnection sseConnection,
+																			 @NonNull SseComment sseComment,
+																			 @NonNull Duration writeDuration,
+																			 @NonNull Throwable throwable,
+																			 @Nullable Duration deliveryLag,
+																			 @Nullable Integer payloadBytes,
+																			 @Nullable Integer queueDepth) {
+		requireNonNull(sseConnection);
+		requireNonNull(sseComment);
 		requireNonNull(writeDuration);
 		requireNonNull(throwable);
 
-		Attributes attributes = serverSentEventCommentAttributes(serverSentEventConnection, serverSentEventComment.getCommentType());
+		Attributes attributes = serverSentEventCommentAttributes(sseConnection, sseComment.getCommentType());
 		this.serverSentEventCommentWriteFailureCounter.add(1, attributes);
 		this.serverSentEventCommentWriteDurationHistogram.record(seconds(writeDuration), attributes);
 
@@ -692,17 +692,17 @@ public final class OpenTelemetryMetricsCollector implements MetricsCollector {
 	}
 
 	@Override
-	public void didDropServerSentEventComment(@NonNull ServerSentEventConnection serverSentEventConnection,
-																						@NonNull ServerSentEventComment serverSentEventComment,
-																						@NonNull ServerSentEventDropReason reason,
-																						@Nullable Integer payloadBytes,
-																						@Nullable Integer queueDepth) {
-		requireNonNull(serverSentEventConnection);
-		requireNonNull(serverSentEventComment);
+	public void didDropSseComment(@NonNull SseConnection sseConnection,
+																@NonNull SseComment sseComment,
+																@NonNull SseEventDropReason reason,
+																@Nullable Integer payloadBytes,
+																@Nullable Integer queueDepth) {
+		requireNonNull(sseConnection);
+		requireNonNull(sseComment);
 		requireNonNull(reason);
 
 		Attributes attributes = Attributes.builder()
-				.putAll(serverSentEventCommentAttributes(serverSentEventConnection, serverSentEventComment.getCommentType()))
+				.putAll(serverSentEventCommentAttributes(sseConnection, sseComment.getCommentType()))
 				.put(SSE_DROP_REASON_ATTRIBUTE_KEY, enumValue(reason))
 				.build();
 		this.serverSentEventCommentDropCounter.add(1, attributes);
@@ -714,20 +714,20 @@ public final class OpenTelemetryMetricsCollector implements MetricsCollector {
 	}
 
 	@Override
-	public void didBroadcastServerSentEvent(@NonNull ResourcePathDeclaration route,
-																					int attempted,
-																					int enqueued,
-																					int dropped) {
+	public void didBroadcastSseEvent(@NonNull ResourcePathDeclaration route,
+																	 int attempted,
+																	 int enqueued,
+																	 int dropped) {
 		requireNonNull(route);
 		recordBroadcastTotals(route, BROADCAST_PAYLOAD_EVENT, UNKNOWN_COMMENT_TYPE, attempted, enqueued, dropped);
 	}
 
 	@Override
-	public void didBroadcastServerSentEventComment(@NonNull ResourcePathDeclaration route,
-																								 ServerSentEventComment.@NonNull CommentType commentType,
-																								 int attempted,
-																								 int enqueued,
-																								 int dropped) {
+	public void didBroadcastSseComment(@NonNull ResourcePathDeclaration route,
+																		 SseComment.@NonNull CommentType commentType,
+																		 int attempted,
+																		 int enqueued,
+																		 int dropped) {
 		requireNonNull(route);
 		requireNonNull(commentType);
 		recordBroadcastTotals(route, BROADCAST_PAYLOAD_COMMENT, enumValue(commentType), attempted, enqueued, dropped);
@@ -802,21 +802,21 @@ public final class OpenTelemetryMetricsCollector implements MetricsCollector {
 	}
 
 	@NonNull
-	private Attributes serverSentEventAttributes(@NonNull ServerSentEventConnection serverSentEventConnection) {
-		requireNonNull(serverSentEventConnection);
+	private Attributes serverSentEventAttributes(@NonNull SseConnection sseConnection) {
+		requireNonNull(sseConnection);
 		return Attributes.of(
 				HTTP_ROUTE_ATTRIBUTE_KEY,
-				routeFor(serverSentEventConnection.getResourceMethod())
+				routeFor(sseConnection.getResourceMethod())
 		);
 	}
 
 	@NonNull
-	private Attributes serverSentEventCommentAttributes(@NonNull ServerSentEventConnection serverSentEventConnection,
-																											ServerSentEventComment.@NonNull CommentType commentType) {
-		requireNonNull(serverSentEventConnection);
+	private Attributes serverSentEventCommentAttributes(@NonNull SseConnection sseConnection,
+																											SseComment.@NonNull CommentType commentType) {
+		requireNonNull(sseConnection);
 		requireNonNull(commentType);
 		return Attributes.builder()
-				.putAll(serverSentEventAttributes(serverSentEventConnection))
+				.putAll(serverSentEventAttributes(sseConnection))
 				.put(SSE_COMMENT_TYPE_ATTRIBUTE_KEY, enumValue(commentType))
 				.build();
 	}
