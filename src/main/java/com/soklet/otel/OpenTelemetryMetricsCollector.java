@@ -28,6 +28,7 @@ import com.soklet.ServerType;
 import com.soklet.SseComment;
 import com.soklet.SseConnection;
 import com.soklet.SseEvent;
+import com.soklet.StreamTermination;
 import io.opentelemetry.api.GlobalOpenTelemetry;
 import io.opentelemetry.api.OpenTelemetry;
 import io.opentelemetry.api.common.AttributeKey;
@@ -58,6 +59,11 @@ import static java.util.Objects.requireNonNull;
  * <p>
  * By default, standard HTTP metrics use OpenTelemetry Semantic Convention names. Soklet-specific concepts
  * (for example SSE queue/drop/broadcast details) are emitted with {@code soklet.*} names.
+ * <p>
+ * If inbound requests include W3C trace context, Soklet exposes it via {@link Request#getTraceContext()} to
+ * custom metrics collectors and application code. This metrics-only implementation intentionally does not emit
+ * trace IDs, parent IDs, or {@code tracestate} values as metric attributes because those values are high-cardinality
+ * and belong in logs, spans, or exemplar-aware tracing integrations instead.
  * <p>
  * See <a href="https://soklet.com/docs/metrics-collection">https://soklet.com/docs/metrics-collection</a> for Soklet's metrics/telemetry documentation.
  *
@@ -148,15 +154,15 @@ public final class OpenTelemetryMetricsCollector implements MetricsCollector {
 	private final LongHistogram responseBodySizeHistogram;
 
 	@NonNull
-	private final LongUpDownCounter activeServerSentEventConnectionsCounter;
+	private final LongUpDownCounter activeServerSentEventStreamsCounter;
 	@NonNull
-	private final LongCounter serverSentEventConnectionsEstablishedCounter;
+	private final LongCounter serverSentEventStreamsEstablishedCounter;
 	@NonNull
 	private final LongCounter serverSentEventHandshakeFailureCounter;
 	@NonNull
-	private final LongCounter serverSentEventConnectionsTerminatedCounter;
+	private final LongCounter serverSentEventStreamsTerminatedCounter;
 	@NonNull
-	private final DoubleHistogram serverSentEventConnectionDurationHistogram;
+	private final DoubleHistogram serverSentEventStreamDurationHistogram;
 	@NonNull
 	private final LongCounter serverSentEventWrittenCounter;
 	@NonNull
@@ -314,24 +320,24 @@ public final class OpenTelemetryMetricsCollector implements MetricsCollector {
 				.setUnit("By")
 				.build();
 
-		this.activeServerSentEventConnectionsCounter = meter.upDownCounterBuilder("soklet.sse.connections.active")
-				.setDescription("Number of active SSE connections.")
-				.setUnit("{connection}")
+		this.activeServerSentEventStreamsCounter = meter.upDownCounterBuilder("soklet.sse.streams.active")
+				.setDescription("Number of active SSE streams.")
+				.setUnit("{stream}")
 				.build();
-		this.serverSentEventConnectionsEstablishedCounter = meter.counterBuilder("soklet.sse.connections.established")
-				.setDescription("Total number of SSE connections established.")
-				.setUnit("{connection}")
+		this.serverSentEventStreamsEstablishedCounter = meter.counterBuilder("soklet.sse.streams.established")
+				.setDescription("Total number of SSE streams established.")
+				.setUnit("{stream}")
 				.build();
-		this.serverSentEventHandshakeFailureCounter = meter.counterBuilder("soklet.sse.connections.handshake.failures")
-				.setDescription("Total number of SSE handshake failures.")
-				.setUnit("{connection}")
+		this.serverSentEventHandshakeFailureCounter = meter.counterBuilder("soklet.sse.handshakes.rejected")
+				.setDescription("Total number of rejected SSE handshakes.")
+				.setUnit("{handshake}")
 				.build();
-		this.serverSentEventConnectionsTerminatedCounter = meter.counterBuilder("soklet.sse.connections.terminated")
-				.setDescription("Total number of terminated SSE connections.")
-				.setUnit("{connection}")
+		this.serverSentEventStreamsTerminatedCounter = meter.counterBuilder("soklet.sse.streams.terminated")
+				.setDescription("Total number of terminated SSE streams.")
+				.setUnit("{stream}")
 				.build();
-		this.serverSentEventConnectionDurationHistogram = meter.histogramBuilder("soklet.sse.connection.duration")
-				.setDescription("SSE connection duration.")
+		this.serverSentEventStreamDurationHistogram = meter.histogramBuilder("soklet.sse.stream.duration")
+				.setDescription("SSE stream duration.")
 				.setUnit("s")
 				.build();
 		this.serverSentEventWrittenCounter = meter.counterBuilder("soklet.sse.events.written")
@@ -532,8 +538,8 @@ public final class OpenTelemetryMetricsCollector implements MetricsCollector {
 		requireNonNull(sseConnection);
 
 		Attributes attributes = serverSentEventAttributes(sseConnection);
-		this.activeServerSentEventConnectionsCounter.add(1, attributes);
-		this.serverSentEventConnectionsEstablishedCounter.add(1, attributes);
+		this.activeServerSentEventStreamsCounter.add(1, attributes);
+		this.serverSentEventStreamsEstablishedCounter.add(1, attributes);
 	}
 
 	@Override
@@ -555,22 +561,19 @@ public final class OpenTelemetryMetricsCollector implements MetricsCollector {
 
 	@Override
 	public void didTerminateSseConnection(@NonNull SseConnection sseConnection,
-																				@NonNull Duration connectionDuration,
-																				SseConnection.@NonNull TerminationReason terminationReason,
-																				@Nullable Throwable throwable) {
+																				@NonNull StreamTermination termination) {
 		requireNonNull(sseConnection);
-		requireNonNull(connectionDuration);
-		requireNonNull(terminationReason);
+		requireNonNull(termination);
 
 		Attributes routeAttributes = serverSentEventAttributes(sseConnection);
 		Attributes durationAttributes = Attributes.builder()
 				.putAll(routeAttributes)
-				.put(SSE_TERMINATION_REASON_ATTRIBUTE_KEY, enumValue(terminationReason))
+				.put(SSE_TERMINATION_REASON_ATTRIBUTE_KEY, enumValue(termination.getReason()))
 				.build();
 
-		this.activeServerSentEventConnectionsCounter.add(-1, routeAttributes);
-		this.serverSentEventConnectionsTerminatedCounter.add(1, durationAttributes);
-		this.serverSentEventConnectionDurationHistogram.record(seconds(connectionDuration), durationAttributes);
+		this.activeServerSentEventStreamsCounter.add(-1, routeAttributes);
+		this.serverSentEventStreamsTerminatedCounter.add(1, durationAttributes);
+		this.serverSentEventStreamDurationHistogram.record(seconds(termination.getDuration()), durationAttributes);
 	}
 
 	@Override

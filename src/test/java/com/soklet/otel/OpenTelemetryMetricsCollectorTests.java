@@ -26,6 +26,8 @@ import com.soklet.ServerType;
 import com.soklet.SseComment;
 import com.soklet.SseConnection;
 import com.soklet.SseEvent;
+import com.soklet.StreamTermination;
+import com.soklet.StreamTerminationReason;
 import io.opentelemetry.api.common.AttributeKey;
 import io.opentelemetry.api.common.Attributes;
 import io.opentelemetry.sdk.OpenTelemetrySdk;
@@ -142,14 +144,30 @@ public class OpenTelemetryMetricsCollectorTests {
 				0
 		);
 		collector.didBroadcastSseEvent(ResourcePathDeclaration.fromPath("/chat"), 3, 2, 1);
-		collector.didTerminateSseConnection(connection, Duration.ofSeconds(3),
-				SseConnection.TerminationReason.REMOTE_CLOSE, null);
+		collector.didTerminateSseConnection(connection, StreamTermination
+				.with(StreamTerminationReason.CLIENT_DISCONNECTED, Duration.ofSeconds(3))
+				.build());
 
 		Collection<MetricData> metrics = harness.metricReader().collectAllMetrics();
 
 		Assertions.assertEquals(
 				0L,
-				longSumValue(metrics, "soklet.sse.connections.active",
+				longSumValue(metrics, "soklet.sse.streams.active",
+						attributes -> "/chat".equals(attributes.get(ROUTE_ATTRIBUTE_KEY)))
+		);
+		Assertions.assertEquals(
+				1L,
+				longSumValue(metrics, "soklet.sse.streams.established",
+						attributes -> "/chat".equals(attributes.get(ROUTE_ATTRIBUTE_KEY)))
+		);
+		Assertions.assertEquals(
+				1L,
+				longSumValue(metrics, "soklet.sse.streams.terminated",
+						attributes -> "/chat".equals(attributes.get(ROUTE_ATTRIBUTE_KEY)))
+		);
+		Assertions.assertEquals(
+				1L,
+				histogramCount(metrics, "soklet.sse.stream.duration",
 						attributes -> "/chat".equals(attributes.get(ROUTE_ATTRIBUTE_KEY)))
 		);
 		Assertions.assertEquals(

@@ -10,17 +10,20 @@
     <a href="https://www.soklet.com" target="_blank">Soklet</a> by supplying
     <a href="https://otel.javadoc.soklet.com/com/soklet/otel/OpenTelemetryMetricsCollector.html"><code>OpenTelemetryMetricsCollector</code></a>,
     an implementation of
-    <a href="https://javadoc.soklet.com/com/soklet/MetricsCollector.html"><code>MetricsCollector</code></a>.
+    <a href="https://javadoc.soklet.com/com/soklet/MetricsCollector.html"><code>MetricsCollector</code></a>, and
+    <a href="https://otel.javadoc.soklet.com/com/soklet/otel/OpenTelemetryLifecycleObserver.html"><code>OpenTelemetryLifecycleObserver</code></a>,
+    an implementation of
+    <a href="https://javadoc.soklet.com/com/soklet/LifecycleObserver.html"><code>LifecycleObserver</code></a>.
     <br/><br/>
     Wire it into
     <a href="https://javadoc.soklet.com/com/soklet/SokletConfig.html"><code>SokletConfig</code></a>
-    via <code>.metricsCollector(...)</code> using either an
+    via <code>.metricsCollector(...)</code> and <code>.lifecycleObservers(...)</code> using either an
     <a href="https://javadoc.io/doc/io.opentelemetry/opentelemetry-api/1.59.0/io/opentelemetry/api/OpenTelemetry.html"><code>OpenTelemetry</code></a>
-    or
+    instance, or via lower-level
     <a href="https://javadoc.io/doc/io.opentelemetry/opentelemetry-api/1.59.0/io/opentelemetry/api/metrics/Meter.html"><code>Meter</code></a>
-    instance.
+    and <code>Tracer</code> instances.
     <br/><br/>
-    By default, standard HTTP metrics use OpenTelemetry Semantic Convention names, while Soklet-specific metrics are emitted for concepts such as Server-Sent Events.
+    By default, standard HTTP metrics use OpenTelemetry Semantic Convention names, while Soklet-specific metrics are emitted for concepts such as Server-Sent Events. Trace spans use Soklet's parsed W3C trace context as the remote parent when available.
     <br/><br/>
     <strong>Please refer to the official documentation at <a href="https://www.soklet.com" target="_blank">https://www.soklet.com</a>.</strong>
     <br/><br/>

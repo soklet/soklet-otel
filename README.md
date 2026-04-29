@@ -7,7 +7,7 @@
 
 # Soklet OpenTelemetry Integration (otel)
 
-[OpenTelemetry](https://opentelemetry.io) metrics integration for [Soklet](https://www.soklet.com), implemented via [`MetricsCollector`](https://javadoc.soklet.com/com/soklet/MetricsCollector.html).
+[OpenTelemetry](https://opentelemetry.io) integration for [Soklet](https://www.soklet.com), implemented via [`MetricsCollector`](https://javadoc.soklet.com/com/soklet/MetricsCollector.html) for metrics and [`LifecycleObserver`](https://javadoc.soklet.com/com/soklet/LifecycleObserver.html) for traces.
 
 ## What Is It?
 
@@ -15,11 +15,16 @@ This Soklet add-on library provides
 [`OpenTelemetryMetricsCollector`](https://otel.javadoc.soklet.com/com/soklet/otel/OpenTelemetryMetricsCollector.html),
 a production-oriented implementation of Soklet's
 [`MetricsCollector`](https://javadoc.soklet.com/com/soklet/MetricsCollector.html) interface.
+It also provides
+[`OpenTelemetryLifecycleObserver`](https://otel.javadoc.soklet.com/com/soklet/otel/OpenTelemetryLifecycleObserver.html),
+a production-oriented implementation of Soklet's
+[`LifecycleObserver`](https://javadoc.soklet.com/com/soklet/LifecycleObserver.html) interface.
 
-It records HTTP + SSE lifecycle telemetry into OpenTelemetry
+The metrics collector records HTTP + SSE lifecycle telemetry into OpenTelemetry
 [`Meter`](https://javadoc.io/doc/io.opentelemetry/opentelemetry-api/1.59.0/io/opentelemetry/api/metrics/Meter.html)
 instruments (counters, up-down counters,
 and histograms), so your existing OTel pipeline/exporter stack can collect and ship metrics.
+The lifecycle observer creates OpenTelemetry server spans for HTTP requests, streaming responses, SSE streams, and MCP JSON-RPC requests using Soklet's parsed W3C trace context as the remote parent when available.
 
 Its only dependency other than [Soklet](https://www.soklet.com) is [opentelemetry-java](https://github.com/open-telemetry/opentelemetry-java) (the Java implementation of the OpenTelemetry API).
 
@@ -31,27 +36,29 @@ Like [Soklet](https://www.soklet.com), Java 17+ is required.
 <dependency>
   <groupId>com.soklet</groupId>
   <artifactId>soklet-otel</artifactId>
-  <version>1.1.0</version>
+  <version>1.2.0-SNAPSHOT</version>
 </dependency>
 ```
 
 ## Usage
 
-Create a collector and wire it into
+Create a collector and observer and wire them into
 [`SokletConfig`](https://javadoc.soklet.com/com/soklet/SokletConfig.html):
 
 ```java
 import com.soklet.SokletConfig;
-import com.soklet.Server;
+import com.soklet.HttpServer;
+import com.soklet.otel.OpenTelemetryLifecycleObserver;
 import com.soklet.otel.OpenTelemetryMetricsCollector;
 import io.opentelemetry.api.OpenTelemetry;
+import java.util.List;
 
 // Acquire an OpenTelemetry instance from wherever you'd like...
 OpenTelemetry openTelemetry = myOpenTelemetry();
 
-// ...and use it to drive Soklet's OpenTelemetryMetricsCollector.
-SokletConfig config = SokletConfig.withServer(
-  Server.fromPort(8080)
+// ...and use it to drive Soklet's OpenTelemetry integrations.
+SokletConfig config = SokletConfig.withHttpServer(
+  HttpServer.fromPort(8080)
 ).metricsCollector(
   OpenTelemetryMetricsCollector.withOpenTelemetry(openTelemetry)
     // Optional: SOKLET for fully-custom soklet.* HTTP metric names
@@ -59,6 +66,12 @@ SokletConfig config = SokletConfig.withServer(
     .instrumentationName("com.mycompany.myapp.soklet")
     .instrumentationVersion("1.0.0")
     .build()
+).lifecycleObservers(List.of(
+  OpenTelemetryLifecycleObserver.withOpenTelemetry(openTelemetry)
+    .instrumentationName("com.mycompany.myapp.soklet")
+    .instrumentationVersion("1.0.0")
+    .build()
+)
 ).build();
 ```
 
@@ -66,11 +79,15 @@ Related API references:
 
 - [`OpenTelemetryMetricsCollector`](https://otel.javadoc.soklet.com/com/soklet/otel/OpenTelemetryMetricsCollector.html)
 - [`OpenTelemetryMetricsCollector.MetricNamingStrategy`](https://otel.javadoc.soklet.com/com/soklet/otel/OpenTelemetryMetricsCollector.MetricNamingStrategy.html)
+- [`OpenTelemetryLifecycleObserver`](https://otel.javadoc.soklet.com/com/soklet/otel/OpenTelemetryLifecycleObserver.html)
+- [`SpanPolicy`](https://otel.javadoc.soklet.com/com/soklet/otel/SpanPolicy.html)
+- [`SpanNamingStrategy`](https://otel.javadoc.soklet.com/com/soklet/otel/SpanNamingStrategy.html)
 - [`OpenTelemetry`](https://javadoc.io/doc/io.opentelemetry/opentelemetry-api/1.59.0/io/opentelemetry/api/OpenTelemetry.html)
 - [`Meter`](https://javadoc.io/doc/io.opentelemetry/opentelemetry-api/1.59.0/io/opentelemetry/api/metrics/Meter.html)
 - [`SokletConfig`](https://javadoc.soklet.com/com/soklet/SokletConfig.html)
-- [`Server`](https://javadoc.soklet.com/com/soklet/Server.html)
+- [`HttpServer`](https://javadoc.soklet.com/com/soklet/HttpServer.html)
 - [`MetricsCollector`](https://javadoc.soklet.com/com/soklet/MetricsCollector.html)
+- [`LifecycleObserver`](https://javadoc.soklet.com/com/soklet/LifecycleObserver.html)
 
 If you already have a
 [`Meter`](https://javadoc.io/doc/io.opentelemetry/opentelemetry-api/1.59.0/io/opentelemetry/api/metrics/Meter.html),
@@ -99,11 +116,11 @@ Soklet-specific metrics (all strategies):
 - `soklet.server.request.read.failures`
 - `soklet.server.response.write.duration`
 - `soklet.server.response.write.failures`
-- `soklet.sse.connections.active`
-- `soklet.sse.connections.established`
-- `soklet.sse.connections.handshake.failures`
-- `soklet.sse.connections.terminated`
-- `soklet.sse.connection.duration`
+- `soklet.sse.streams.active`
+- `soklet.sse.streams.established`
+- `soklet.sse.handshakes.rejected`
+- `soklet.sse.streams.terminated`
+- `soklet.sse.stream.duration`
 - `soklet.sse.events.written`
 - `soklet.sse.events.write.failures`
 - `soklet.sse.events.write.duration`
@@ -142,6 +159,21 @@ Common attributes:
 - With `SEMCONV`, unmatched requests omit `http.route` (per OTel guidance).
 - With `SOKLET`, unmatched requests are grouped under `_unmatched`.
 - Request paths, remote addresses, and raw query values are intentionally not emitted as attributes by default.
+- W3C trace context from `traceparent` / `tracestate` is available through Soklet's `Request` callbacks, but this metrics collector does not emit trace IDs, parent IDs, or `tracestate` values as metric attributes. Those values are high-cardinality and are better handled by logs, spans, or exemplar-aware tracing integrations.
+
+## Emitted Spans
+
+[`OpenTelemetryLifecycleObserver`](https://otel.javadoc.soklet.com/com/soklet/otel/OpenTelemetryLifecycleObserver.html) creates `SERVER` spans for:
+
+- Standard HTTP requests.
+- Streaming HTTP responses, with the request span kept open until stream termination.
+- Server-Sent Event connections.
+- MCP JSON-RPC requests.
+- MCP SSE streams.
+
+Inbound W3C `traceparent` / `tracestate` headers parsed by [`Request::getTraceContext`](<https://javadoc.soklet.com/com/soklet/Request.html#getTraceContext()>) are used as the remote parent. Malformed or absent trace context produces a root span. Long-lived SSE and MCP SSE spans may not appear in some tracing backends until the stream ends.
+
+Trace IDs belong in spans and logs, not metric labels. If you need metrics-to-trace drill-down, use OpenTelemetry exemplars in your metrics pipeline rather than adding trace IDs as attributes.
 
 ## Notes
 
