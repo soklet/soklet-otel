@@ -71,7 +71,7 @@ SokletConfig config = SokletConfig.withHttpServer(
     .instrumentationName("com.mycompany.myapp.soklet")
     .instrumentationVersion("1.0.0")
     .build()
-)
+  )
 ).build();
 ```
 
