@@ -139,6 +139,8 @@ public final class OpenTelemetryMetricsCollector implements MetricsCollector {
 	@NonNull
 	private final LongCounter requestReadFailureCounter;
 	@NonNull
+	private final LongCounter transportFailureCounter;
+	@NonNull
 	private final LongUpDownCounter activeRequestsCounter;
 	@NonNull
 	private final DoubleHistogram requestDurationHistogram;
@@ -288,6 +290,10 @@ public final class OpenTelemetryMetricsCollector implements MetricsCollector {
 		this.requestReadFailureCounter = meter.counterBuilder("soklet.server.request.read.failures")
 				.setDescription("Total number of request read/parse failures.")
 				.setUnit("{request}")
+				.build();
+		this.transportFailureCounter = meter.counterBuilder("soklet.server.transport.failures")
+				.setDescription("Total number of low-level transport failures.")
+				.setUnit("{failure}")
 				.build();
 		this.activeRequestsCounter = meter.upDownCounterBuilder(activeRequestsMetricName)
 				.setDescription("Number of in-flight requests currently being handled.")
@@ -461,6 +467,15 @@ public final class OpenTelemetryMetricsCollector implements MetricsCollector {
 		requireNonNull(serverType);
 		requireNonNull(reason);
 		this.requestReadFailureCounter.add(1, serverTypeAndReasonAttributes(serverType, reason));
+	}
+
+	@Override
+	public void didRecordTransportFailure(@NonNull ServerType serverType,
+																				@NonNull TransportFailureReason reason,
+																				@Nullable Throwable throwable) {
+		requireNonNull(serverType);
+		requireNonNull(reason);
+		this.transportFailureCounter.add(1, transportFailureAttributes(serverType, reason, throwable));
 	}
 
 	@Override
@@ -751,6 +766,23 @@ public final class OpenTelemetryMetricsCollector implements MetricsCollector {
 				.put(SERVER_TYPE_ATTRIBUTE_KEY, enumValue(serverType))
 				.put(FAILURE_REASON_ATTRIBUTE_KEY, enumValue(reason))
 				.build();
+	}
+
+	@NonNull
+	private Attributes transportFailureAttributes(@NonNull ServerType serverType,
+																								@NonNull TransportFailureReason reason,
+																								@Nullable Throwable throwable) {
+		requireNonNull(serverType);
+		requireNonNull(reason);
+
+		var builder = Attributes.builder()
+				.put(SERVER_TYPE_ATTRIBUTE_KEY, enumValue(serverType))
+				.put(FAILURE_REASON_ATTRIBUTE_KEY, enumValue(reason));
+
+		if (throwable != null)
+			builder.put(ERROR_TYPE_ATTRIBUTE_KEY, throwable.getClass().getName());
+
+		return builder.build();
 	}
 
 	@NonNull

@@ -36,7 +36,7 @@ Like [Soklet](https://www.soklet.com), Java 17+ is required.
 <dependency>
   <groupId>com.soklet</groupId>
   <artifactId>soklet-otel</artifactId>
-  <version>1.2.0</version>
+  <version>1.3.0-SNAPSHOT</version>
 </dependency>
 ```
 
@@ -114,6 +114,7 @@ Soklet-specific metrics (all strategies):
 - `soklet.server.requests.accepted`
 - `soklet.server.requests.rejected`
 - `soklet.server.request.read.failures`
+- `soklet.server.transport.failures`
 - `soklet.server.response.write.duration`
 - `soklet.server.response.write.failures`
 - `soklet.sse.streams.active`

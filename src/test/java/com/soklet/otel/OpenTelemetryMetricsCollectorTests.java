@@ -40,6 +40,7 @@ import org.jspecify.annotations.NonNull;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
+import java.io.IOException;
 import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
@@ -59,6 +60,9 @@ import static java.util.Objects.requireNonNull;
  */
 public class OpenTelemetryMetricsCollectorTests {
 	private static final AttributeKey<String> HTTP_METHOD_ATTRIBUTE_KEY = AttributeKey.stringKey("http.request.method");
+	private static final AttributeKey<String> SERVER_TYPE_ATTRIBUTE_KEY = AttributeKey.stringKey("soklet.server.type");
+	private static final AttributeKey<String> FAILURE_REASON_ATTRIBUTE_KEY = AttributeKey.stringKey("soklet.failure.reason");
+	private static final AttributeKey<String> ERROR_TYPE_ATTRIBUTE_KEY = AttributeKey.stringKey("error.type");
 	private static final AttributeKey<String> SSE_DROP_REASON_ATTRIBUTE_KEY = AttributeKey.stringKey("soklet.sse.drop.reason");
 	private static final AttributeKey<String> ROUTE_ATTRIBUTE_KEY = AttributeKey.stringKey("http.route");
 	private static final AttributeKey<Long> STATUS_CODE_ATTRIBUTE_KEY = AttributeKey.longKey("http.response.status_code");
@@ -105,6 +109,40 @@ public class OpenTelemetryMetricsCollectorTests {
 				1L,
 				histogramCount(metrics, "soklet.server.response.write.duration",
 						attributes -> "/widgets/{id}".equals(attributes.get(ROUTE_ATTRIBUTE_KEY)))
+		);
+	}
+
+	@Test
+	public void recordsTransportFailureMetrics() {
+		TestHarness harness = TestHarness.create();
+		OpenTelemetryMetricsCollector collector = OpenTelemetryMetricsCollector
+				.withMeter(harness.openTelemetrySdk().getMeter("test-transport"))
+				.build();
+
+		collector.didRecordTransportFailure(
+				ServerType.STANDARD_HTTP,
+				MetricsCollector.TransportFailureReason.RESPONSE_WRITE_IDLE_TIMEOUT,
+				new IOException("stalled"));
+		collector.didRecordTransportFailure(
+				ServerType.STANDARD_HTTP,
+				MetricsCollector.TransportFailureReason.TASK_ERROR,
+				null);
+
+		Collection<MetricData> metrics = harness.metricReader().collectAllMetrics();
+
+		Assertions.assertEquals(
+				1L,
+				longSumValue(metrics, "soklet.server.transport.failures",
+						attributes -> "standard_http".equals(attributes.get(SERVER_TYPE_ATTRIBUTE_KEY))
+								&& "response_write_idle_timeout".equals(attributes.get(FAILURE_REASON_ATTRIBUTE_KEY))
+								&& IOException.class.getName().equals(attributes.get(ERROR_TYPE_ATTRIBUTE_KEY)))
+		);
+		Assertions.assertEquals(
+				1L,
+				longSumValue(metrics, "soklet.server.transport.failures",
+						attributes -> "standard_http".equals(attributes.get(SERVER_TYPE_ATTRIBUTE_KEY))
+								&& "task_error".equals(attributes.get(FAILURE_REASON_ATTRIBUTE_KEY))
+								&& attributes.get(ERROR_TYPE_ATTRIBUTE_KEY) == null)
 		);
 	}
 
