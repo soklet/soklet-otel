@@ -114,7 +114,7 @@ Soklet-specific metrics (all strategies):
 - `soklet.server.requests.accepted`
 - `soklet.server.requests.rejected`
 - `soklet.server.request.read.failures`
-- `soklet.server.transport.failures`
+- `soklet.server.transport.failures` (`soklet.server.type`, `soklet.failure.reason`, optional `error.type`)
 - `soklet.server.response.write.duration`
 - `soklet.server.response.write.failures`
 - `soklet.sse.streams.active`
@@ -142,7 +142,7 @@ Soklet-specific metrics (all strategies):
 
 Common attributes:
 
-- `soklet.server.type` (`standard_http`, `server_sent_event`)
+- `soklet.server.type` (`standard_http`, `sse`, `mcp`)
 - `soklet.failure.reason`
 - `error.type`
 - `http.request.method`
@@ -160,6 +160,7 @@ Common attributes:
 - With `SEMCONV`, unmatched requests omit `http.route` (per OTel guidance).
 - With `SOKLET`, unmatched requests are grouped under `_unmatched`.
 - Request paths, remote addresses, and raw query values are intentionally not emitted as attributes by default.
+- `error.type` is emitted only when Soklet supplies a throwable for the measurement. It uses the throwable class name, so deployments with many custom exception types should account for that cardinality in their OpenTelemetry backend.
 - W3C trace context from `traceparent` / `tracestate` is available through Soklet's `Request` callbacks, but this metrics collector does not emit trace IDs, parent IDs, or `tracestate` values as metric attributes. Those values are high-cardinality and are better handled by logs, spans, or exemplar-aware tracing integrations.
 
 ## Emitted Spans

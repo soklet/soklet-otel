@@ -127,6 +127,10 @@ public class OpenTelemetryMetricsCollectorTests {
 				ServerType.STANDARD_HTTP,
 				MetricsCollector.TransportFailureReason.TASK_ERROR,
 				null);
+		collector.didRecordTransportFailure(
+				ServerType.SSE,
+				MetricsCollector.TransportFailureReason.WRITE_TIMEOUT,
+				null);
 
 		Collection<MetricData> metrics = harness.metricReader().collectAllMetrics();
 
@@ -142,6 +146,13 @@ public class OpenTelemetryMetricsCollectorTests {
 				longSumValue(metrics, "soklet.server.transport.failures",
 						attributes -> "standard_http".equals(attributes.get(SERVER_TYPE_ATTRIBUTE_KEY))
 								&& "task_error".equals(attributes.get(FAILURE_REASON_ATTRIBUTE_KEY))
+								&& attributes.get(ERROR_TYPE_ATTRIBUTE_KEY) == null)
+		);
+		Assertions.assertEquals(
+				1L,
+				longSumValue(metrics, "soklet.server.transport.failures",
+						attributes -> "sse".equals(attributes.get(SERVER_TYPE_ATTRIBUTE_KEY))
+								&& "write_timeout".equals(attributes.get(FAILURE_REASON_ATTRIBUTE_KEY))
 								&& attributes.get(ERROR_TYPE_ATTRIBUTE_KEY) == null)
 		);
 	}
