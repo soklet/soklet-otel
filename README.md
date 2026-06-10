@@ -20,7 +20,7 @@ It also provides
 a production-oriented implementation of Soklet's
 [`LifecycleObserver`](https://javadoc.soklet.com/com/soklet/LifecycleObserver.html) interface.
 
-The metrics collector records HTTP + SSE lifecycle telemetry into OpenTelemetry
+The metrics collector records HTTP, SSE, and MCP session lifecycle telemetry into OpenTelemetry
 [`Meter`](https://javadoc.io/doc/io.opentelemetry/opentelemetry-api/1.59.0/io/opentelemetry/api/metrics/Meter.html)
 instruments (counters, up-down counters,
 and histograms), so your existing OTel pipeline/exporter stack can collect and ship metrics.
@@ -139,6 +139,10 @@ Soklet-specific metrics (all strategies):
 - `soklet.sse.broadcast.attempted`
 - `soklet.sse.broadcast.enqueued`
 - `soklet.sse.broadcast.dropped`
+- `soklet.mcp.sessions.active` (`soklet.mcp.endpoint.class`)
+- `soklet.mcp.sessions.created` (`soklet.mcp.endpoint.class`)
+- `soklet.mcp.sessions.terminated` (`soklet.mcp.endpoint.class`, `soklet.mcp.session.termination.reason`)
+- `soklet.mcp.session.duration` (`soklet.mcp.endpoint.class`, `soklet.mcp.session.termination.reason`)
 
 Common attributes:
 
@@ -153,6 +157,8 @@ Common attributes:
 - `soklet.sse.drop.reason`
 - `soklet.sse.comment.type`
 - `soklet.sse.broadcast.payload.type`
+- `soklet.mcp.endpoint.class`
+- `soklet.mcp.session.termination.reason`
 
 ## Cardinality Guidance
 
@@ -161,6 +167,7 @@ Common attributes:
 - With `SOKLET`, unmatched requests are grouped under `_unmatched`.
 - Request paths, remote addresses, and raw query values are intentionally not emitted as attributes by default.
 - `error.type` is emitted only when Soklet supplies a throwable for the measurement. It uses the throwable class name, so deployments with many custom exception types should account for that cardinality in their OpenTelemetry backend.
+- `soklet.mcp.endpoint.class` uses the endpoint's fully-qualified class name, so its cardinality is bounded by the number of MCP endpoint classes. MCP session IDs are intentionally never emitted as attributes.
 - W3C trace context from `traceparent` / `tracestate` is available through Soklet's `Request` callbacks, but this metrics collector does not emit trace IDs, parent IDs, or `tracestate` values as metric attributes. Those values are high-cardinality and are better handled by logs, spans, or exemplar-aware tracing integrations.
 
 ## Emitted Spans
@@ -185,5 +192,9 @@ Trace IDs belong in spans and logs, not metric labels. If you need metrics-to-tr
 - `snapshot()` / `snapshotText()` from
   [`MetricsCollector`](https://javadoc.soklet.com/com/soklet/MetricsCollector.html)
   are not implemented here; use your OpenTelemetry backend/exporter to query metrics.
+- `soklet.sse.stream.duration` and `soklet.mcp.session.duration` advise long-lived bucket boundaries
+  (1s, 10s, 60s, 5m, 30m, 1h, 4h, 24h) suited to stream/session lifetimes instead of OpenTelemetry's
+  request-oriented defaults. The SSE histogram's bucket layout changed in 1.3.0 - recheck any
+  dashboards or alerts that referenced its previous default buckets.
 
 For Soklet documentation and lifecycle semantics, see [https://www.soklet.com](https://www.soklet.com).

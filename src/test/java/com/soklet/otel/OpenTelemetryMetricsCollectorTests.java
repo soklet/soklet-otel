@@ -18,6 +18,8 @@ package com.soklet.otel;
 
 import com.soklet.HttpMethod;
 import com.soklet.MarshaledResponse;
+import com.soklet.McpEndpoint;
+import com.soklet.McpSessionTerminationReason;
 import com.soklet.MetricsCollector;
 import com.soklet.Request;
 import com.soklet.ResourceMethod;
@@ -66,6 +68,9 @@ public class OpenTelemetryMetricsCollectorTests {
 	private static final AttributeKey<String> SSE_DROP_REASON_ATTRIBUTE_KEY = AttributeKey.stringKey("soklet.sse.drop.reason");
 	private static final AttributeKey<String> ROUTE_ATTRIBUTE_KEY = AttributeKey.stringKey("http.route");
 	private static final AttributeKey<Long> STATUS_CODE_ATTRIBUTE_KEY = AttributeKey.longKey("http.response.status_code");
+	private static final AttributeKey<String> MCP_ENDPOINT_CLASS_ATTRIBUTE_KEY = AttributeKey.stringKey("soklet.mcp.endpoint.class");
+	private static final AttributeKey<String> MCP_SESSION_TERMINATION_REASON_ATTRIBUTE_KEY = AttributeKey.stringKey("soklet.mcp.session.termination.reason");
+	private static final List<Double> LONG_LIVED_DURATION_BUCKET_BOUNDARIES = List.of(1D, 10D, 60D, 300D, 1_800D, 3_600D, 14_400D, 86_400D);
 
 	@Test
 	public void recordsHttpRequestAndResponseMetrics() throws Exception {
@@ -235,6 +240,106 @@ public class OpenTelemetryMetricsCollectorTests {
 				longSumValue(metrics, "soklet.sse.broadcast.enqueued",
 						attributes -> "/chat".equals(attributes.get(ROUTE_ATTRIBUTE_KEY)))
 		);
+		// Stream durations use long-lived bucket advice (not OTel's request-oriented defaults) and still record
+		Assertions.assertEquals(
+				LONG_LIVED_DURATION_BUCKET_BOUNDARIES,
+				histogramBoundaries(metrics, "soklet.sse.stream.duration")
+		);
+	}
+
+	@Test
+	public void recordsMcpSessionLifecycleMetrics() {
+		TestHarness harness = TestHarness.create();
+		OpenTelemetryMetricsCollector collector = OpenTelemetryMetricsCollector
+				.withMeter(harness.openTelemetrySdk().getMeter("test-mcp-sessions"))
+				.build();
+
+		Request request = Request.fromPath(HttpMethod.POST, "/mcp");
+
+		collector.didCreateMcpSession(request, TestMcpEndpoint.class, "session-1");
+		collector.didCreateMcpSession(request, TestMcpEndpoint.class, "session-2");
+
+		Collection<MetricData> midFlight = harness.metricReader().collectAllMetrics();
+
+		Assertions.assertEquals(
+				2L,
+				longSumValue(midFlight, "soklet.mcp.sessions.active",
+						attributes -> TestMcpEndpoint.class.getName().equals(attributes.get(MCP_ENDPOINT_CLASS_ATTRIBUTE_KEY)))
+		);
+
+		collector.didTerminateMcpSession(TestMcpEndpoint.class, "session-1", Duration.ofMinutes(2),
+				McpSessionTerminationReason.CLIENT_REQUESTED, null);
+		collector.didTerminateMcpSession(TestMcpEndpoint.class, "session-2", Duration.ofHours(2),
+				McpSessionTerminationReason.IDLE_TIMEOUT, null);
+
+		Collection<MetricData> metrics = harness.metricReader().collectAllMetrics();
+
+		// Create/terminate use matching attribute sets, so the active series nets back to zero
+		Assertions.assertEquals(
+				0L,
+				longSumValue(metrics, "soklet.mcp.sessions.active",
+						attributes -> TestMcpEndpoint.class.getName().equals(attributes.get(MCP_ENDPOINT_CLASS_ATTRIBUTE_KEY)))
+		);
+		Assertions.assertEquals(
+				2L,
+				longSumValue(metrics, "soklet.mcp.sessions.created",
+						attributes -> TestMcpEndpoint.class.getName().equals(attributes.get(MCP_ENDPOINT_CLASS_ATTRIBUTE_KEY)))
+		);
+		Assertions.assertEquals(
+				1L,
+				longSumValue(metrics, "soklet.mcp.sessions.terminated",
+						attributes -> TestMcpEndpoint.class.getName().equals(attributes.get(MCP_ENDPOINT_CLASS_ATTRIBUTE_KEY))
+								&& "client_requested".equals(attributes.get(MCP_SESSION_TERMINATION_REASON_ATTRIBUTE_KEY)))
+		);
+		Assertions.assertEquals(
+				1L,
+				longSumValue(metrics, "soklet.mcp.sessions.terminated",
+						attributes -> TestMcpEndpoint.class.getName().equals(attributes.get(MCP_ENDPOINT_CLASS_ATTRIBUTE_KEY))
+								&& "idle_timeout".equals(attributes.get(MCP_SESSION_TERMINATION_REASON_ATTRIBUTE_KEY)))
+		);
+		Assertions.assertEquals(
+				1L,
+				histogramCount(metrics, "soklet.mcp.session.duration",
+						attributes -> "idle_timeout".equals(attributes.get(MCP_SESSION_TERMINATION_REASON_ATTRIBUTE_KEY)))
+		);
+		// Session durations use long-lived bucket advice suited to minutes-to-hours lifetimes
+		Assertions.assertEquals(
+				LONG_LIVED_DURATION_BUCKET_BOUNDARIES,
+				histogramBoundaries(metrics, "soklet.mcp.session.duration")
+		);
+	}
+
+	@Test
+	public void mcpSessionInitializationFailureNetsActiveToZero() {
+		TestHarness harness = TestHarness.create();
+		OpenTelemetryMetricsCollector collector = OpenTelemetryMetricsCollector
+				.withMeter(harness.openTelemetrySdk().getMeter("test-mcp-init-failure"))
+				.build();
+
+		Request request = Request.fromPath(HttpMethod.POST, "/mcp");
+
+		// A session whose initialization fails is created and then immediately terminated
+		collector.didCreateMcpSession(request, TestMcpEndpoint.class, "doomed-session");
+		collector.didTerminateMcpSession(TestMcpEndpoint.class, "doomed-session", Duration.ofMillis(15),
+				McpSessionTerminationReason.INITIALIZATION_FAILED, new IllegalStateException("init failed"));
+
+		Collection<MetricData> metrics = harness.metricReader().collectAllMetrics();
+
+		Assertions.assertEquals(
+				0L,
+				longSumValue(metrics, "soklet.mcp.sessions.active",
+						attributes -> TestMcpEndpoint.class.getName().equals(attributes.get(MCP_ENDPOINT_CLASS_ATTRIBUTE_KEY)))
+		);
+		Assertions.assertEquals(
+				1L,
+				longSumValue(metrics, "soklet.mcp.sessions.terminated",
+						attributes -> "initialization_failed".equals(attributes.get(MCP_SESSION_TERMINATION_REASON_ATTRIBUTE_KEY)))
+		);
+		Assertions.assertEquals(
+				1L,
+				histogramCount(metrics, "soklet.mcp.session.duration",
+						attributes -> "initialization_failed".equals(attributes.get(MCP_SESSION_TERMINATION_REASON_ATTRIBUTE_KEY)))
+		);
 	}
 
 	@Test
@@ -342,6 +447,14 @@ public class OpenTelemetryMetricsCollectorTests {
 				.orElseThrow();
 	}
 
+	private static List<Double> histogramBoundaries(Collection<MetricData> metrics,
+																									String metricName) {
+		return metricByName(metrics, metricName).getHistogramData().getPoints().stream()
+				.findFirst()
+				.orElseThrow()
+				.getBoundaries();
+	}
+
 	private static MetricData metricByName(Collection<MetricData> metrics,
 																				 String metricName) {
 		return metrics.stream()
@@ -365,6 +478,10 @@ public class OpenTelemetryMetricsCollectorTests {
 
 			return new TestHarness(metricReader, openTelemetrySdk, sdkMeterProvider);
 		}
+	}
+
+	private static final class TestMcpEndpoint implements McpEndpoint {
+		// Default McpEndpoint behavior is sufficient for metrics tests
 	}
 
 	private static final class TestResources {

@@ -18,6 +18,8 @@ package com.soklet.otel;
 
 import com.soklet.ConnectionRejectionReason;
 import com.soklet.MarshaledResponse;
+import com.soklet.McpEndpoint;
+import com.soklet.McpSessionTerminationReason;
 import com.soklet.MetricsCollector;
 import com.soklet.Request;
 import com.soklet.RequestReadFailureReason;
@@ -52,7 +54,7 @@ import java.util.Locale;
 import static java.util.Objects.requireNonNull;
 
 /**
- * OpenTelemetry-backed {@link MetricsCollector} for Soklet HTTP and SSE telemetry.
+ * OpenTelemetry-backed {@link MetricsCollector} for Soklet HTTP, SSE, and MCP telemetry.
  * <p>
  * This implementation records counters/histograms via OpenTelemetry's metrics API and is designed to be
  * lightweight, thread-safe, and non-blocking in request hot paths.
@@ -106,6 +108,12 @@ public final class OpenTelemetryMetricsCollector implements MetricsCollector {
 	private static final AttributeKey<String> SSE_COMMENT_TYPE_ATTRIBUTE_KEY;
 	@NonNull
 	private static final AttributeKey<String> SSE_BROADCAST_PAYLOAD_TYPE_ATTRIBUTE_KEY;
+	@NonNull
+	private static final AttributeKey<String> MCP_ENDPOINT_CLASS_ATTRIBUTE_KEY;
+	@NonNull
+	private static final AttributeKey<String> MCP_SESSION_TERMINATION_REASON_ATTRIBUTE_KEY;
+	@NonNull
+	private static final List<Double> LONG_LIVED_DURATION_BUCKET_BOUNDARIES;
 
 	static {
 		UNMATCHED_ROUTE = "_unmatched";
@@ -126,6 +134,12 @@ public final class OpenTelemetryMetricsCollector implements MetricsCollector {
 		SSE_DROP_REASON_ATTRIBUTE_KEY = AttributeKey.stringKey("soklet.sse.drop.reason");
 		SSE_COMMENT_TYPE_ATTRIBUTE_KEY = AttributeKey.stringKey("soklet.sse.comment.type");
 		SSE_BROADCAST_PAYLOAD_TYPE_ATTRIBUTE_KEY = AttributeKey.stringKey("soklet.sse.broadcast.payload.type");
+		MCP_ENDPOINT_CLASS_ATTRIBUTE_KEY = AttributeKey.stringKey("soklet.mcp.endpoint.class");
+		MCP_SESSION_TERMINATION_REASON_ATTRIBUTE_KEY = AttributeKey.stringKey("soklet.mcp.session.termination.reason");
+		// SSE streams and MCP sessions live for minutes-to-hours (MCP's default idle timeout is 24 hours),
+		// so OpenTelemetry's request-oriented default buckets (which top out at 10 seconds) would collapse
+		// nearly all measurements into the +Inf bucket. Advise boundaries suited to those lifetimes instead.
+		LONG_LIVED_DURATION_BUCKET_BOUNDARIES = List.of(1D, 10D, 60D, 300D, 1_800D, 3_600D, 14_400D, 86_400D);
 	}
 
 	@NonNull
@@ -201,6 +215,16 @@ public final class OpenTelemetryMetricsCollector implements MetricsCollector {
 	private final LongCounter serverSentEventBroadcastEnqueuedCounter;
 	@NonNull
 	private final LongCounter serverSentEventBroadcastDroppedCounter;
+
+	@NonNull
+	private final LongUpDownCounter activeMcpSessionsCounter;
+	@NonNull
+	private final LongCounter mcpSessionsCreatedCounter;
+	@NonNull
+	private final LongCounter mcpSessionsTerminatedCounter;
+	@NonNull
+	private final DoubleHistogram mcpSessionDurationHistogram;
+
 	@NonNull
 	private final MetricNamingStrategy metricNamingStrategy;
 
@@ -345,6 +369,7 @@ public final class OpenTelemetryMetricsCollector implements MetricsCollector {
 		this.serverSentEventStreamDurationHistogram = meter.histogramBuilder("soklet.sse.stream.duration")
 				.setDescription("SSE stream duration.")
 				.setUnit("s")
+				.setExplicitBucketBoundariesAdvice(LONG_LIVED_DURATION_BUCKET_BOUNDARIES)
 				.build();
 		this.serverSentEventWrittenCounter = meter.counterBuilder("soklet.sse.events.written")
 				.setDescription("Total number of SSE events successfully written.")
@@ -419,6 +444,24 @@ public final class OpenTelemetryMetricsCollector implements MetricsCollector {
 		this.serverSentEventBroadcastDroppedCounter = meter.counterBuilder("soklet.sse.broadcast.dropped")
 				.setDescription("Total number of SSE broadcast deliveries dropped before enqueue.")
 				.setUnit("{delivery}")
+				.build();
+
+		this.activeMcpSessionsCounter = meter.upDownCounterBuilder("soklet.mcp.sessions.active")
+				.setDescription("Number of active MCP sessions.")
+				.setUnit("{session}")
+				.build();
+		this.mcpSessionsCreatedCounter = meter.counterBuilder("soklet.mcp.sessions.created")
+				.setDescription("Total number of MCP sessions created.")
+				.setUnit("{session}")
+				.build();
+		this.mcpSessionsTerminatedCounter = meter.counterBuilder("soklet.mcp.sessions.terminated")
+				.setDescription("Total number of MCP sessions terminated.")
+				.setUnit("{session}")
+				.build();
+		this.mcpSessionDurationHistogram = meter.histogramBuilder("soklet.mcp.session.duration")
+				.setDescription("MCP session lifetime from creation to termination.")
+				.setUnit("s")
+				.setExplicitBucketBoundariesAdvice(LONG_LIVED_DURATION_BUCKET_BOUNDARIES)
 				.build();
 	}
 
@@ -751,6 +794,45 @@ public final class OpenTelemetryMetricsCollector implements MetricsCollector {
 		recordBroadcastTotals(route, BROADCAST_PAYLOAD_COMMENT, enumValue(commentType), attempted, enqueued, dropped);
 	}
 
+	@Override
+	public void didCreateMcpSession(@NonNull Request request,
+																	@NonNull Class<? extends McpEndpoint> endpointClass,
+																	@NonNull String sessionId) {
+		requireNonNull(request);
+		requireNonNull(endpointClass);
+		requireNonNull(sessionId);
+
+		// The session ID is intentionally not emitted as an attribute: it is unbounded-cardinality.
+		Attributes attributes = mcpSessionAttributes(endpointClass);
+		this.activeMcpSessionsCounter.add(1, attributes);
+		this.mcpSessionsCreatedCounter.add(1, attributes);
+	}
+
+	@Override
+	public void didTerminateMcpSession(@NonNull Class<? extends McpEndpoint> endpointClass,
+																		 @NonNull String sessionId,
+																		 @NonNull Duration sessionDuration,
+																		 @NonNull McpSessionTerminationReason terminationReason,
+																		 @Nullable Throwable throwable) {
+		requireNonNull(endpointClass);
+		requireNonNull(sessionId);
+		requireNonNull(sessionDuration);
+		requireNonNull(terminationReason);
+
+		// The active counter's decrement must use the SAME attribute set as didCreateMcpSession's
+		// increment (endpoint class only - creation cannot know the eventual termination reason),
+		// otherwise per-series values would never net back to zero.
+		this.activeMcpSessionsCounter.add(-1, mcpSessionAttributes(endpointClass));
+
+		Attributes terminationAttributes = Attributes.builder()
+				.putAll(mcpSessionAttributes(endpointClass))
+				.put(MCP_SESSION_TERMINATION_REASON_ATTRIBUTE_KEY, enumValue(terminationReason))
+				.build();
+
+		this.mcpSessionsTerminatedCounter.add(1, terminationAttributes);
+		this.mcpSessionDurationHistogram.record(seconds(sessionDuration), terminationAttributes);
+	}
+
 	@NonNull
 	private Attributes serverTypeAttributes(@NonNull ServerType serverType) {
 		requireNonNull(serverType);
@@ -834,6 +916,12 @@ public final class OpenTelemetryMetricsCollector implements MetricsCollector {
 			builder.put(ERROR_TYPE_ATTRIBUTE_KEY, errorType);
 
 		return builder.build();
+	}
+
+	@NonNull
+	private static Attributes mcpSessionAttributes(@NonNull Class<? extends McpEndpoint> endpointClass) {
+		requireNonNull(endpointClass);
+		return Attributes.of(MCP_ENDPOINT_CLASS_ATTRIBUTE_KEY, endpointClass.getName());
 	}
 
 	@NonNull
