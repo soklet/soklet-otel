@@ -6,7 +6,7 @@
 
 	<groupId>com.soklet</groupId>
 	<artifactId>soklet-otel</artifactId>
-	<version>1.3.0-SNAPSHOT</version>
+	<version>1.3.0</version>
 	<packaging>jar</packaging>
 	<name>Soklet OpenTelemetry Integration</name>
 	<description>OpenTelemetry metrics and tracing integration for Soklet.</description>
