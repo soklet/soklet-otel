@@ -36,9 +36,11 @@ Like [Soklet](https://www.soklet.com), Java 17+ is required.
 <dependency>
   <groupId>com.soklet</groupId>
   <artifactId>soklet-otel</artifactId>
-  <version>1.3.0</version>
+  <version>1.3.1</version>
 </dependency>
 ```
+
+Version 1.3.1 is built and tested against Soklet 3.5.1. Soklet is a provided dependency of this integration, so applications should continue to declare their Soklet dependency explicitly.
 
 ## Usage
 
@@ -104,7 +106,7 @@ HTTP metrics (default strategy: `SEMCONV`):
 
 - `http.server.active_requests`
 - `http.server.request.duration`
-- `http.server.request.body.size`
+- `http.server.request.body.size` (encoded payload bytes as transferred, excluding headers and transfer framing)
 - `http.server.response.body.size`
 
 Soklet-specific metrics (all strategies):
@@ -160,6 +162,8 @@ Common attributes:
 - `soklet.mcp.endpoint.class`
 - `soklet.mcp.session.termination.reason`
 
+Request decompression failures use `soklet.failure.reason=request_body_decompression_failed`.
+
 ## Cardinality Guidance
 
 - `http.route` uses Soklet route declarations when available (for example `/widgets/{id}`).
@@ -189,6 +193,9 @@ Trace IDs belong in spans and logs, not metric labels. If you need metrics-to-tr
 - The collector is thread-safe and designed for callback hot paths (no I/O or blocking operations in callback methods).
 - [`MetricNamingStrategy.SEMCONV`](https://otel.javadoc.soklet.com/com/soklet/otel/OpenTelemetryMetricsCollector.MetricNamingStrategy.html)
   is the default for HTTP metric names.
+- With `SEMCONV`, `http.server.request.body.size` records the encoded payload size required by the OpenTelemetry HTTP semantic conventions, so a transparently decompressed gzip request reports its compressed size. With `SOKLET`, `soklet.server.request.body.size` records the handler-visible body size instead.
+- If Soklet rejects an oversized request before its complete encoded payload size is known, the `SEMCONV` body-size sample is omitted instead of recording an inaccurate zero.
+- `http.server.response.body.size` records the finalized `MarshaledResponse` size. If Soklet's HTTP transport applies dynamic gzip afterward, this remains the pre-compression size; already-encoded response bodies report their encoded size normally.
 - `snapshot()` / `snapshotText()` from
   [`MetricsCollector`](https://javadoc.soklet.com/com/soklet/MetricsCollector.html)
   are not implemented here; use your OpenTelemetry backend/exporter to query metrics.

@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [master, develop, 'feature/**']
+    branches: [main, develop, 'feature/**']
   pull_request:
   workflow_dispatch:
     inputs:
@@ -45,11 +45,16 @@ jobs:
           java-version: ${{ matrix.jdk }}
           cache: maven
 
-      - name: Install Soklet snapshot
+      - name: Install checked-out Soklet
         run: mvn -B -ntp -f soklet/pom.xml -DskipTests -Dgpg.skip=true install
 
+      - name: Resolve checked-out Soklet version
+        id: soklet-version
+        shell: bash
+        run: echo "version=$(mvn -q -f soklet/pom.xml help:evaluate -Dexpression=project.version -DforceStdout)" >> "$GITHUB_OUTPUT"
+
       - name: Run tests
-        run: mvn -B -ntp -f soklet-otel/pom.xml test
+        run: mvn -B -ntp -f soklet-otel/pom.xml -Dsoklet.version=${{ steps.soklet-version.outputs.version }} test
 
       - name: Build Javadoc
-        run: mvn -B -ntp -f soklet-otel/pom.xml javadoc:javadoc
+        run: mvn -B -ntp -f soklet-otel/pom.xml -Dsoklet.version=${{ steps.soklet-version.outputs.version }} javadoc:javadoc

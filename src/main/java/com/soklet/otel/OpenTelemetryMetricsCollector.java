@@ -61,6 +61,12 @@ import static java.util.Objects.requireNonNull;
  * <p>
  * By default, standard HTTP metrics use OpenTelemetry Semantic Convention names. Soklet-specific concepts
  * (for example SSE queue/drop/broadcast details) are emitted with {@code soklet.*} names.
+ * For request-body size, the default semantic-convention strategy records the encoded payload size as
+ * transferred, while the {@link MetricNamingStrategy#SOKLET} strategy records the handler-visible body size.
+ * If an oversized request is rejected before its complete encoded payload size is known, the
+ * semantic-convention body-size sample is omitted instead of recording an inaccurate zero.
+ * Response-body size is based on the finalized {@link MarshaledResponse}; if the HTTP transport applies
+ * dynamic gzip afterward, that metric remains the pre-compression size.
  * <p>
  * If inbound requests include W3C trace context, Soklet exposes it via {@link Request#getTraceContext()} to
  * custom metrics collectors and application code. This metrics-only implementation intentionally does not emit
@@ -293,6 +299,7 @@ public final class OpenTelemetryMetricsCollector implements MetricsCollector {
 		String activeRequestsMetricName = activeRequestsMetricNameFor(this.metricNamingStrategy);
 		String requestDurationMetricName = requestDurationMetricNameFor(this.metricNamingStrategy);
 		String requestBodySizeMetricName = requestBodySizeMetricNameFor(this.metricNamingStrategy);
+		String requestBodySizeDescription = requestBodySizeDescriptionFor(this.metricNamingStrategy);
 		String responseBodySizeMetricName = responseBodySizeMetricNameFor(this.metricNamingStrategy);
 
 		this.connectionsAcceptedCounter = meter.counterBuilder("soklet.server.connections.accepted")
@@ -341,7 +348,7 @@ public final class OpenTelemetryMetricsCollector implements MetricsCollector {
 				.build();
 		this.requestBodySizeHistogram = meter.histogramBuilder(requestBodySizeMetricName)
 				.ofLongs()
-				.setDescription("Request body size in bytes.")
+				.setDescription(requestBodySizeDescription)
 				.setUnit("By")
 				.build();
 		this.responseBodySizeHistogram = meter.histogramBuilder(responseBodySizeMetricName)
@@ -549,7 +556,14 @@ public final class OpenTelemetryMetricsCollector implements MetricsCollector {
 
 		this.activeRequestsCounter.add(-1, activeRequestAttributes(serverType, request));
 		this.requestDurationHistogram.record(seconds(duration), attributes);
-		this.requestBodySizeHistogram.record(request.getBody().map(body -> (long) body.length).orElse(0L), attributes);
+		long requestBodySizeInBytes = this.metricNamingStrategy == MetricNamingStrategy.SEMCONV
+				? request.getEncodedBodySizeInBytes().longValue()
+				: request.getBody().map(body -> (long) body.length).orElse(0L);
+
+		if (this.metricNamingStrategy != MetricNamingStrategy.SEMCONV
+				|| !request.isContentTooLarge()
+				|| requestBodySizeInBytes > 0)
+			this.requestBodySizeHistogram.record(requestBodySizeInBytes, attributes);
 		this.responseBodySizeHistogram.record(marshaledResponse.getBodyLength(), attributes);
 
 		if (!throwables.isEmpty())
@@ -993,6 +1007,14 @@ public final class OpenTelemetryMetricsCollector implements MetricsCollector {
 	}
 
 	@NonNull
+	private static String requestBodySizeDescriptionFor(@NonNull MetricNamingStrategy metricNamingStrategy) {
+		requireNonNull(metricNamingStrategy);
+		if (metricNamingStrategy == MetricNamingStrategy.SEMCONV)
+			return "Encoded request payload body size in bytes as transferred, excluding headers and transfer framing.";
+		return "Request body size in bytes as observed by handlers.";
+	}
+
+	@NonNull
 	private static String responseBodySizeMetricNameFor(@NonNull MetricNamingStrategy metricNamingStrategy) {
 		requireNonNull(metricNamingStrategy);
 		if (metricNamingStrategy == MetricNamingStrategy.SEMCONV)
@@ -1040,10 +1062,12 @@ public final class OpenTelemetryMetricsCollector implements MetricsCollector {
 	public enum MetricNamingStrategy {
 		/**
 		 * Use OpenTelemetry Semantic Convention names for standard HTTP server metrics.
+		 * Request-body size records the encoded payload size as transferred.
 		 */
 		SEMCONV,
 		/**
 		 * Use {@code soklet.*} names for all metrics.
+		 * Request-body size records the body size visible to handlers.
 		 */
 		SOKLET
 	}

@@ -22,6 +22,7 @@ import com.soklet.McpEndpoint;
 import com.soklet.McpSessionTerminationReason;
 import com.soklet.MetricsCollector;
 import com.soklet.Request;
+import com.soklet.RequestReadFailureReason;
 import com.soklet.ResourceMethod;
 import com.soklet.ResourcePathDeclaration;
 import com.soklet.ServerType;
@@ -115,6 +116,83 @@ public class OpenTelemetryMetricsCollectorTests {
 				histogramCount(metrics, "soklet.server.response.write.duration",
 						attributes -> "/widgets/{id}".equals(attributes.get(ROUTE_ATTRIBUTE_KEY)))
 		);
+	}
+
+	@Test
+	public void requestBodySizeUsesEncodedBytesForSemconvAndHandlerVisibleBytesForSoklet() throws Exception {
+		TestHarness harness = TestHarness.create();
+		OpenTelemetryMetricsCollector semconvCollector = OpenTelemetryMetricsCollector
+				.withMeter(harness.openTelemetrySdk().getMeter("test-semconv-request-body-size"))
+				.build();
+		OpenTelemetryMetricsCollector sokletCollector = OpenTelemetryMetricsCollector
+				.withMeter(harness.openTelemetrySdk().getMeter("test-soklet-request-body-size"))
+				.metricNamingStrategy(OpenTelemetryMetricsCollector.MetricNamingStrategy.SOKLET)
+				.build();
+
+		ResourceMethod resourceMethod = createResourceMethod(HttpMethod.POST, "/widgets/{id}", "widget");
+		Request encodedRequest = Request.withPath(HttpMethod.POST, "/widgets/123")
+				.body(new byte[24])
+				.build();
+		Request handlerVisibleRequest = encodedRequest.copy()
+				.body(new byte[128])
+				.finish();
+		MarshaledResponse response = MarshaledResponse.fromStatusCode(204);
+
+		semconvCollector.didStartRequestHandling(ServerType.STANDARD_HTTP, handlerVisibleRequest, resourceMethod);
+		semconvCollector.didFinishRequestHandling(ServerType.STANDARD_HTTP, handlerVisibleRequest, resourceMethod,
+				response, Duration.ofMillis(1), List.of());
+		sokletCollector.didStartRequestHandling(ServerType.STANDARD_HTTP, handlerVisibleRequest, resourceMethod);
+		sokletCollector.didFinishRequestHandling(ServerType.STANDARD_HTTP, handlerVisibleRequest, resourceMethod,
+				response, Duration.ofMillis(1), List.of());
+
+		Collection<MetricData> metrics = harness.metricReader().collectAllMetrics();
+
+		Assertions.assertEquals(24D, histogramSum(metrics, "http.server.request.body.size",
+				attributes -> "/widgets/{id}".equals(attributes.get(ROUTE_ATTRIBUTE_KEY))));
+		Assertions.assertEquals(128D, histogramSum(metrics, "soklet.server.request.body.size",
+				attributes -> "/widgets/{id}".equals(attributes.get(ROUTE_ATTRIBUTE_KEY))));
+	}
+
+	@Test
+	public void semconvOmitsUnknownEncodedBodySizeForIncompleteRequest() throws Exception {
+		TestHarness harness = TestHarness.create();
+		OpenTelemetryMetricsCollector collector = OpenTelemetryMetricsCollector
+				.withMeter(harness.openTelemetrySdk().getMeter("test-unknown-request-body-size"))
+				.build();
+		ResourceMethod resourceMethod = createResourceMethod(HttpMethod.POST, "/widgets/{id}", "widget");
+		Request request = Request.withPath(HttpMethod.POST, "/widgets/123")
+				.contentTooLarge(true)
+				.build();
+		MarshaledResponse response = MarshaledResponse.fromStatusCode(413);
+
+		collector.didStartRequestHandling(ServerType.STANDARD_HTTP, request, resourceMethod);
+		collector.didFinishRequestHandling(ServerType.STANDARD_HTTP, request, resourceMethod,
+				response, Duration.ofMillis(1), List.of());
+
+		Collection<MetricData> metrics = harness.metricReader().collectAllMetrics();
+		Assertions.assertTrue(metrics.stream()
+				.noneMatch(metric -> "http.server.request.body.size".equals(metric.getName())));
+	}
+
+	@Test
+	public void recordsRequestBodyDecompressionFailureReason() {
+		TestHarness harness = TestHarness.create();
+		OpenTelemetryMetricsCollector collector = OpenTelemetryMetricsCollector
+				.withMeter(harness.openTelemetrySdk().getMeter("test-request-decompression-failure"))
+				.build();
+
+		collector.didFailToReadRequest(
+				ServerType.STANDARD_HTTP,
+				null,
+				"/widgets",
+				RequestReadFailureReason.REQUEST_BODY_DECOMPRESSION_FAILED,
+				null);
+
+		Collection<MetricData> metrics = harness.metricReader().collectAllMetrics();
+
+		Assertions.assertEquals(1L, longSumValue(metrics, "soklet.server.request.read.failures",
+				attributes -> "standard_http".equals(attributes.get(SERVER_TYPE_ATTRIBUTE_KEY))
+						&& "request_body_decompression_failed".equals(attributes.get(FAILURE_REASON_ATTRIBUTE_KEY))));
 	}
 
 	@Test
@@ -443,6 +521,16 @@ public class OpenTelemetryMetricsCollectorTests {
 		return metricByName(metrics, metricName).getHistogramData().getPoints().stream()
 				.filter(point -> attributesMatcher.test(point.getAttributes()))
 				.mapToLong(HistogramPointData::getCount)
+				.findFirst()
+				.orElseThrow();
+	}
+
+	private static double histogramSum(Collection<MetricData> metrics,
+																		 String metricName,
+																		 java.util.function.Predicate<Attributes> attributesMatcher) {
+		return metricByName(metrics, metricName).getHistogramData().getPoints().stream()
+				.filter(point -> attributesMatcher.test(point.getAttributes()))
+				.mapToDouble(HistogramPointData::getSum)
 				.findFirst()
 				.orElseThrow();
 	}
