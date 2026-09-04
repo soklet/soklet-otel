@@ -16,8 +16,7 @@
 
 package com.soklet.otel;
 
-import com.soklet.McpEndpoint;
-import com.soklet.McpSseStream;
+import com.soklet.McpRequestContext;
 import com.soklet.Request;
 import com.soklet.ResourceMethod;
 import com.soklet.SseConnection;
@@ -45,12 +44,10 @@ public interface SpanNamingStrategy {
 	String sseConnectionSpanName(@NonNull SseConnection connection);
 
 	@NonNull
-	String mcpRequestSpanName(@NonNull Request request,
-														@NonNull Class<? extends McpEndpoint> endpointClass,
-														@NonNull String jsonRpcMethod);
-
-	@NonNull
-	String mcpSseStreamSpanName(@NonNull McpSseStream stream);
+	default String mcpRequestSpanName(@NonNull McpRequestContext context) {
+		return DefaultSpanNamingStrategy.defaultInstance()
+				.mcpRequestSpanName(context);
+	}
 
 	@NonNull
 	static SpanNamingStrategy defaultInstance() {

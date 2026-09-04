@@ -18,9 +18,9 @@ package com.soklet.otel;
 
 import com.soklet.ConnectionRejectionReason;
 import com.soklet.MarshaledResponse;
-import com.soklet.McpEndpoint;
-import com.soklet.McpSessionTerminationReason;
+import com.soklet.McpMetricsEvent;
 import com.soklet.MetricsCollector;
+import com.soklet.ShutdownComponentDisposition;
 import com.soklet.Request;
 import com.soklet.RequestReadFailureReason;
 import com.soklet.RequestRejectionReason;
@@ -72,6 +72,10 @@ import static java.util.Objects.requireNonNull;
  * custom metrics collectors and application code. This metrics-only implementation intentionally does not emit
  * trace IDs, parent IDs, or {@code tracestate} values as metric attributes because those values are high-cardinality
  * and belong in logs, spans, or exemplar-aware tracing integrations instead.
+ * MCP listener shutdown dispositions are projected to the exact lower-snake values
+ * {@code not_started}, {@code graceful_termination}, {@code forced_termination},
+ * {@code unexpected_termination}, {@code residual_activity}, and
+ * {@code termination_unknown}.
  * <p>
  * See <a href="https://soklet.com/docs/metrics-collection">https://soklet.com/docs/metrics-collection</a> for Soklet's metrics/telemetry documentation.
  *
@@ -115,11 +119,25 @@ public final class OpenTelemetryMetricsCollector implements MetricsCollector {
 	@NonNull
 	private static final AttributeKey<String> SSE_BROADCAST_PAYLOAD_TYPE_ATTRIBUTE_KEY;
 	@NonNull
-	private static final AttributeKey<String> MCP_ENDPOINT_CLASS_ATTRIBUTE_KEY;
+	private static final AttributeKey<String> MCP_ENDPOINT_ATTRIBUTE_KEY;
 	@NonNull
-	private static final AttributeKey<String> MCP_SESSION_TERMINATION_REASON_ATTRIBUTE_KEY;
+	private static final AttributeKey<String> RPC_METHOD_ATTRIBUTE_KEY;
+	@NonNull
+	private static final AttributeKey<String> MCP_REQUEST_OUTCOME_ATTRIBUTE_KEY;
+	@NonNull
+	private static final AttributeKey<String> MCP_STREAM_TERMINATION_REASON_ATTRIBUTE_KEY;
+	@NonNull
+	private static final AttributeKey<String> MCP_SUBSCRIPTION_TERMINATION_REASON_ATTRIBUTE_KEY;
+	@NonNull
+	private static final AttributeKey<Long> RPC_JSON_RPC_ERROR_CODE_ATTRIBUTE_KEY;
+	@NonNull
+	private static final AttributeKey<String> MCP_SHUTDOWN_OUTCOME_ATTRIBUTE_KEY;
 	@NonNull
 	private static final List<Double> LONG_LIVED_DURATION_BUCKET_BOUNDARIES;
+	@NonNull
+	private static final List<Double> MCP_REQUEST_DURATION_BUCKET_BOUNDARIES;
+	@NonNull
+	private static final List<Double> MCP_LONG_LIVED_DURATION_BUCKET_BOUNDARIES;
 
 	static {
 		UNMATCHED_ROUTE = "_unmatched";
@@ -140,12 +158,24 @@ public final class OpenTelemetryMetricsCollector implements MetricsCollector {
 		SSE_DROP_REASON_ATTRIBUTE_KEY = AttributeKey.stringKey("soklet.sse.drop.reason");
 		SSE_COMMENT_TYPE_ATTRIBUTE_KEY = AttributeKey.stringKey("soklet.sse.comment.type");
 		SSE_BROADCAST_PAYLOAD_TYPE_ATTRIBUTE_KEY = AttributeKey.stringKey("soklet.sse.broadcast.payload.type");
-		MCP_ENDPOINT_CLASS_ATTRIBUTE_KEY = AttributeKey.stringKey("soklet.mcp.endpoint.class");
-		MCP_SESSION_TERMINATION_REASON_ATTRIBUTE_KEY = AttributeKey.stringKey("soklet.mcp.session.termination.reason");
-		// SSE streams and MCP sessions live for minutes-to-hours (MCP's default idle timeout is 24 hours),
-		// so OpenTelemetry's request-oriented default buckets (which top out at 10 seconds) would collapse
-		// nearly all measurements into the +Inf bucket. Advise boundaries suited to those lifetimes instead.
+		MCP_ENDPOINT_ATTRIBUTE_KEY = AttributeKey.stringKey("soklet.mcp.endpoint");
+		RPC_METHOD_ATTRIBUTE_KEY = AttributeKey.stringKey("rpc.method");
+		MCP_REQUEST_OUTCOME_ATTRIBUTE_KEY = AttributeKey.stringKey("soklet.mcp.request.outcome");
+		MCP_STREAM_TERMINATION_REASON_ATTRIBUTE_KEY =
+				AttributeKey.stringKey("soklet.mcp.stream.termination.reason");
+		MCP_SUBSCRIPTION_TERMINATION_REASON_ATTRIBUTE_KEY =
+				AttributeKey.stringKey("soklet.mcp.subscription.termination.reason");
+		RPC_JSON_RPC_ERROR_CODE_ATTRIBUTE_KEY = AttributeKey.longKey("rpc.jsonrpc.error_code");
+		MCP_SHUTDOWN_OUTCOME_ATTRIBUTE_KEY = AttributeKey.stringKey("soklet.mcp.shutdown.outcome");
+		// SSE streams live for minutes-to-hours, so OpenTelemetry's request-oriented
+		// defaults would collapse nearly all measurements into the +Inf bucket.
 		LONG_LIVED_DURATION_BUCKET_BOUNDARIES = List.of(1D, 10D, 60D, 300D, 1_800D, 3_600D, 14_400D, 86_400D);
+		MCP_REQUEST_DURATION_BUCKET_BOUNDARIES = List.of(
+				0.001D, 0.002D, 0.005D, 0.010D, 0.025D, 0.050D, 0.100D,
+				0.200D, 0.400D, 0.800D, 1.500D, 3D, 7D, 15D);
+		MCP_LONG_LIVED_DURATION_BUCKET_BOUNDARIES = List.of(
+				1D, 5D, 10D, 30D, 60D, 120D, 300D, 600D, 1_800D,
+				3_600D, 7_200D, 14_400D);
 	}
 
 	@NonNull
@@ -223,13 +253,47 @@ public final class OpenTelemetryMetricsCollector implements MetricsCollector {
 	private final LongCounter serverSentEventBroadcastDroppedCounter;
 
 	@NonNull
-	private final LongUpDownCounter activeMcpSessionsCounter;
+	private final LongCounter mcpServerStartsCounter;
 	@NonNull
-	private final LongCounter mcpSessionsCreatedCounter;
+	private final LongCounter mcpShutdownsCounter;
 	@NonNull
-	private final LongCounter mcpSessionsTerminatedCounter;
+	private final LongCounter mcpConnectionsAcceptedCounter;
 	@NonNull
-	private final DoubleHistogram mcpSessionDurationHistogram;
+	private final LongCounter mcpConnectionsRejectedCounter;
+	@NonNull
+	private final LongCounter mcpRequestsAcceptedCounter;
+	@NonNull
+	private final LongCounter mcpRequestsRejectedCounter;
+	@NonNull
+	private final LongUpDownCounter mcpActiveRequestsCounter;
+	@NonNull
+	private final LongCounter mcpRequestsCompletedCounter;
+	@NonNull
+	private final DoubleHistogram mcpRequestDurationHistogram;
+	@NonNull
+	private final LongUpDownCounter mcpActiveRequestStreamsCounter;
+	@NonNull
+	private final DoubleHistogram mcpRequestStreamDurationHistogram;
+	@NonNull
+	private final LongUpDownCounter mcpActiveSubscriptionsCounter;
+	@NonNull
+	private final DoubleHistogram mcpSubscriptionDurationHistogram;
+	@NonNull
+	private final LongCounter mcpCancelationsSignaledCounter;
+	@NonNull
+	private final LongCounter mcpProgressEmittedCounter;
+	@NonNull
+	private final LongCounter mcpKeepAlivesEmittedCounter;
+	@NonNull
+	private final LongCounter mcpProtocolErrorsCounter;
+	@NonNull
+	private final LongCounter mcpUnknownMirroredHeadersCounter;
+	@NonNull
+	private final LongUpDownCounter mcpActiveHandlerExecutionsCounter;
+	@NonNull
+	private final LongUpDownCounter mcpHandlerQueueDepthCounter;
+	@NonNull
+	private final LongCounter mcpHandlerCapacityRejectionsCounter;
 
 	@NonNull
 	private final MetricNamingStrategy metricNamingStrategy;
@@ -453,22 +517,92 @@ public final class OpenTelemetryMetricsCollector implements MetricsCollector {
 				.setUnit("{delivery}")
 				.build();
 
-		this.activeMcpSessionsCounter = meter.upDownCounterBuilder("soklet.mcp.sessions.active")
-				.setDescription("Number of active MCP sessions.")
-				.setUnit("{session}")
+		this.mcpServerStartsCounter = meter.counterBuilder("soklet.mcp.server.starts")
+				.setDescription("Total successful MCP server starts.")
+				.setUnit("{start}")
 				.build();
-		this.mcpSessionsCreatedCounter = meter.counterBuilder("soklet.mcp.sessions.created")
-				.setDescription("Total number of MCP sessions created.")
-				.setUnit("{session}")
+		this.mcpShutdownsCounter = meter.counterBuilder("soklet.mcp.shutdowns")
+				.setDescription("Total MCP server shutdowns by outcome.")
+				.setUnit("{shutdown}")
 				.build();
-		this.mcpSessionsTerminatedCounter = meter.counterBuilder("soklet.mcp.sessions.terminated")
-				.setDescription("Total number of MCP sessions terminated.")
-				.setUnit("{session}")
+		this.mcpConnectionsAcceptedCounter = meter.counterBuilder("soklet.mcp.connections.accepted")
+				.setDescription("Total accepted MCP connections admitted within the connection-capacity bound.")
+				.setUnit("{connection}")
 				.build();
-		this.mcpSessionDurationHistogram = meter.histogramBuilder("soklet.mcp.session.duration")
-				.setDescription("MCP session lifetime from creation to termination.")
+		this.mcpConnectionsRejectedCounter = meter.counterBuilder("soklet.mcp.connections.rejected")
+				.setDescription("Total MCP connections rejected because the connection-capacity bound was full.")
+				.setUnit("{connection}")
+				.build();
+		this.mcpRequestsAcceptedCounter = meter.counterBuilder("soklet.mcp.requests.accepted")
+				.setDescription("Total MCP requests accepted by the bounded protocol processor.")
+				.setUnit("{request}")
+				.build();
+		this.mcpRequestsRejectedCounter = meter.counterBuilder("soklet.mcp.requests.rejected")
+				.setDescription("Total MCP requests rejected before admitted semantic handling.")
+				.setUnit("{request}")
+				.build();
+		this.mcpActiveRequestsCounter = meter.upDownCounterBuilder("soklet.mcp.requests.active")
+				.setDescription("Currently active admitted MCP requests.")
+				.setUnit("{request}")
+				.build();
+		this.mcpRequestsCompletedCounter = meter.counterBuilder("soklet.mcp.requests.completed")
+				.setDescription("Total completed MCP requests.")
+				.setUnit("{request}")
+				.build();
+		this.mcpRequestDurationHistogram = meter.histogramBuilder("soklet.mcp.request.duration")
+				.setDescription("MCP request duration.")
 				.setUnit("s")
-				.setExplicitBucketBoundariesAdvice(LONG_LIVED_DURATION_BUCKET_BOUNDARIES)
+				.setExplicitBucketBoundariesAdvice(MCP_REQUEST_DURATION_BUCKET_BOUNDARIES)
+				.build();
+		this.mcpActiveRequestStreamsCounter = meter.upDownCounterBuilder("soklet.mcp.request.streams.active")
+				.setDescription("Currently active MCP request streams.")
+				.setUnit("{stream}")
+				.build();
+		this.mcpRequestStreamDurationHistogram = meter.histogramBuilder("soklet.mcp.request.stream.duration")
+				.setDescription("MCP request-stream duration.")
+				.setUnit("s")
+				.setExplicitBucketBoundariesAdvice(MCP_LONG_LIVED_DURATION_BUCKET_BOUNDARIES)
+				.build();
+		this.mcpActiveSubscriptionsCounter = meter.upDownCounterBuilder("soklet.mcp.subscriptions.active")
+				.setDescription("Currently active MCP subscriptions.")
+				.setUnit("{subscription}")
+				.build();
+		this.mcpSubscriptionDurationHistogram = meter.histogramBuilder("soklet.mcp.subscription.duration")
+				.setDescription("MCP subscription duration.")
+				.setUnit("s")
+				.setExplicitBucketBoundariesAdvice(MCP_LONG_LIVED_DURATION_BUCKET_BOUNDARIES)
+				.build();
+		this.mcpCancelationsSignaledCounter = meter.counterBuilder("soklet.mcp.cancelations.signaled")
+				.setDescription("Total cooperative MCP request cancelations signaled by endpoint and method.")
+				.setUnit("{cancelation}")
+				.build();
+		this.mcpProgressEmittedCounter = meter.counterBuilder("soklet.mcp.progress.emitted")
+				.setDescription("Total MCP progress notifications accepted for delivery by endpoint and method.")
+				.setUnit("{notification}")
+				.build();
+		this.mcpKeepAlivesEmittedCounter = meter.counterBuilder("soklet.mcp.keepalives.emitted")
+				.setDescription("Total MCP keep-alive comments accepted for delivery.")
+				.setUnit("{comment}")
+				.build();
+		this.mcpProtocolErrorsCounter = meter.counterBuilder("soklet.mcp.protocol.errors")
+				.setDescription("Total client-visible MCP protocol errors by fixed code.")
+				.setUnit("{error}")
+				.build();
+		this.mcpUnknownMirroredHeadersCounter = meter.counterBuilder("soklet.mcp.unknown.mirrored.headers")
+				.setDescription("Total unknown MCP mirrored-header occurrences by endpoint and method.")
+				.setUnit("{header}")
+				.build();
+		this.mcpActiveHandlerExecutionsCounter = meter.upDownCounterBuilder("soklet.mcp.handler.executions.active")
+				.setDescription("Currently occupied MCP handler-execution slots.")
+				.setUnit("{handler}")
+				.build();
+		this.mcpHandlerQueueDepthCounter = meter.upDownCounterBuilder("soklet.mcp.handler.queue.depth")
+				.setDescription("MCP application requests waiting for a handler slot.")
+				.setUnit("{request}")
+				.build();
+		this.mcpHandlerCapacityRejectionsCounter = meter.counterBuilder("soklet.mcp.handler.capacity.rejections")
+				.setDescription("Total MCP requests rejected because the handler queue was full.")
+				.setUnit("{request}")
 				.build();
 	}
 
@@ -521,11 +655,109 @@ public final class OpenTelemetryMetricsCollector implements MetricsCollector {
 
 	@Override
 	public void didRecordTransportFailure(@NonNull ServerType serverType,
-																				@NonNull TransportFailureReason reason,
-																				@Nullable Throwable throwable) {
+																@NonNull TransportFailureReason reason,
+																@Nullable Throwable throwable) {
 		requireNonNull(serverType);
 		requireNonNull(reason);
 		this.transportFailureCounter.add(1, transportFailureAttributes(serverType, reason, throwable));
+	}
+
+	@Override
+	public void didRecordMcpMetricsEvent(@NonNull McpMetricsEvent event) {
+		requireNonNull(event);
+
+		if (event instanceof McpMetricsEvent.ServerStarted) {
+			this.mcpServerStartsCounter.add(1);
+		} else if (event instanceof McpMetricsEvent.ServerStopped serverStopped) {
+			this.mcpShutdownsCounter.add(1, Attributes.of(
+					MCP_SHUTDOWN_OUTCOME_ATTRIBUTE_KEY,
+					mcpShutdownOutcome(
+							serverStopped.getShutdownComponentDisposition())));
+		} else if (event instanceof McpMetricsEvent.ConnectionAccepted) {
+			this.mcpConnectionsAcceptedCounter.add(1);
+		} else if (event instanceof McpMetricsEvent.ConnectionRejected) {
+			this.mcpConnectionsRejectedCounter.add(1);
+		} else if (event instanceof McpMetricsEvent.RequestAccepted) {
+			this.mcpRequestsAcceptedCounter.add(1);
+		} else if (event instanceof McpMetricsEvent.RequestRejected) {
+			this.mcpRequestsRejectedCounter.add(1);
+		} else if (event instanceof McpMetricsEvent.RequestStarted) {
+			this.mcpActiveRequestsCounter.add(1);
+		} else if (event instanceof McpMetricsEvent.RequestFinished requestFinished) {
+			Attributes attributes = mcpRequestAttributes(
+					requestFinished.getEndpointPath(),
+					requestFinished.getJsonRpcMethod(), requestFinished.getOutcome());
+			double durationSeconds = safeSeconds(requestFinished.getDuration());
+			this.mcpActiveRequestsCounter.add(-1);
+			this.mcpRequestsCompletedCounter.add(1, attributes);
+			this.mcpRequestDurationHistogram.record(durationSeconds, attributes);
+		} else if (event instanceof McpMetricsEvent.RequestStreamOpened) {
+			this.mcpActiveRequestStreamsCounter.add(1);
+		} else if (event instanceof McpMetricsEvent.RequestStreamClosed requestStreamClosed) {
+			Attributes attributes = mcpRequestStreamAttributes(
+					requestStreamClosed.getEndpointPath(),
+					requestStreamClosed.getJsonRpcMethod(),
+					requestStreamClosed.getReason());
+			double durationSeconds = safeSeconds(requestStreamClosed.getDuration());
+			this.mcpActiveRequestStreamsCounter.add(-1);
+			this.mcpRequestStreamDurationHistogram.record(durationSeconds, attributes);
+		} else if (event instanceof McpMetricsEvent.SubscriptionOpened) {
+			this.mcpActiveSubscriptionsCounter.add(1);
+		} else if (event instanceof McpMetricsEvent.SubscriptionClosed subscriptionClosed) {
+			Attributes attributes = mcpSubscriptionAttributes(
+					subscriptionClosed.getEndpointPath(),
+					subscriptionClosed.getReason());
+			double durationSeconds = safeSeconds(subscriptionClosed.getDuration());
+			this.mcpActiveSubscriptionsCounter.add(-1);
+			this.mcpSubscriptionDurationHistogram.record(durationSeconds, attributes);
+		} else if (event instanceof McpMetricsEvent.CancelationSignaled cancelationSignaled) {
+			this.mcpCancelationsSignaledCounter.add(1, mcpEndpointMethodAttributes(
+					cancelationSignaled.getEndpointPath(),
+					cancelationSignaled.getJsonRpcMethod()));
+		} else if (event instanceof McpMetricsEvent.ProgressEmitted progressEmitted) {
+			this.mcpProgressEmittedCounter.add(1, mcpEndpointMethodAttributes(
+					progressEmitted.getEndpointPath(),
+					progressEmitted.getJsonRpcMethod()));
+		} else if (event instanceof McpMetricsEvent.KeepAliveEmitted) {
+			this.mcpKeepAlivesEmittedCounter.add(1);
+		} else if (event instanceof McpMetricsEvent.ProtocolError protocolError) {
+			this.mcpProtocolErrorsCounter.add(1, Attributes.of(
+					RPC_JSON_RPC_ERROR_CODE_ATTRIBUTE_KEY,
+					protocolError.getCode().longValue()));
+		} else if (event instanceof McpMetricsEvent.UnknownMirroredHeader unknownMirroredHeader) {
+			this.mcpUnknownMirroredHeadersCounter.add(1, mcpEndpointMethodAttributes(
+					unknownMirroredHeader.getEndpointPath(),
+					unknownMirroredHeader.getJsonRpcMethod()));
+		} else if (event instanceof McpMetricsEvent.HandlerExecutionStarted) {
+			this.mcpActiveHandlerExecutionsCounter.add(1);
+		} else if (event instanceof McpMetricsEvent.HandlerExecutionFinished) {
+			this.mcpActiveHandlerExecutionsCounter.add(-1);
+		} else if (event instanceof McpMetricsEvent.HandlerQueued) {
+			this.mcpHandlerQueueDepthCounter.add(1);
+		} else if (event instanceof McpMetricsEvent.HandlerDequeued) {
+			this.mcpHandlerQueueDepthCounter.add(-1);
+		} else if (event instanceof McpMetricsEvent.HandlerCapacityRejected) {
+			this.mcpHandlerCapacityRejectionsCounter.add(1);
+		} else if (event instanceof McpMetricsEvent.TransportFailure transportFailure) {
+			this.transportFailureCounter.add(1, Attributes.of(
+					SERVER_TYPE_ATTRIBUTE_KEY, "mcp",
+					FAILURE_REASON_ATTRIBUTE_KEY,
+					enumValue(transportFailure.getReason())));
+		}
+	}
+
+	@NonNull
+	private static String mcpShutdownOutcome(
+			@NonNull ShutdownComponentDisposition outcome) {
+		requireNonNull(outcome);
+		return switch (outcome) {
+			case NOT_STARTED -> "not_started";
+			case GRACEFUL_TERMINATION -> "graceful_termination";
+			case FORCED_TERMINATION -> "forced_termination";
+			case UNEXPECTED_TERMINATION -> "unexpected_termination";
+			case RESIDUAL_ACTIVITY -> "residual_activity";
+			case TERMINATION_UNKNOWN -> "termination_unknown";
+		};
 	}
 
 	@Override
@@ -808,45 +1040,6 @@ public final class OpenTelemetryMetricsCollector implements MetricsCollector {
 		recordBroadcastTotals(route, BROADCAST_PAYLOAD_COMMENT, enumValue(commentType), attempted, enqueued, dropped);
 	}
 
-	@Override
-	public void didCreateMcpSession(@NonNull Request request,
-																	@NonNull Class<? extends McpEndpoint> endpointClass,
-																	@NonNull String sessionId) {
-		requireNonNull(request);
-		requireNonNull(endpointClass);
-		requireNonNull(sessionId);
-
-		// The session ID is intentionally not emitted as an attribute: it is unbounded-cardinality.
-		Attributes attributes = mcpSessionAttributes(endpointClass);
-		this.activeMcpSessionsCounter.add(1, attributes);
-		this.mcpSessionsCreatedCounter.add(1, attributes);
-	}
-
-	@Override
-	public void didTerminateMcpSession(@NonNull Class<? extends McpEndpoint> endpointClass,
-																		 @NonNull String sessionId,
-																		 @NonNull Duration sessionDuration,
-																		 @NonNull McpSessionTerminationReason terminationReason,
-																		 @Nullable Throwable throwable) {
-		requireNonNull(endpointClass);
-		requireNonNull(sessionId);
-		requireNonNull(sessionDuration);
-		requireNonNull(terminationReason);
-
-		// The active counter's decrement must use the SAME attribute set as didCreateMcpSession's
-		// increment (endpoint class only - creation cannot know the eventual termination reason),
-		// otherwise per-series values would never net back to zero.
-		this.activeMcpSessionsCounter.add(-1, mcpSessionAttributes(endpointClass));
-
-		Attributes terminationAttributes = Attributes.builder()
-				.putAll(mcpSessionAttributes(endpointClass))
-				.put(MCP_SESSION_TERMINATION_REASON_ATTRIBUTE_KEY, enumValue(terminationReason))
-				.build();
-
-		this.mcpSessionsTerminatedCounter.add(1, terminationAttributes);
-		this.mcpSessionDurationHistogram.record(seconds(sessionDuration), terminationAttributes);
-	}
-
 	@NonNull
 	private Attributes serverTypeAttributes(@NonNull ServerType serverType) {
 		requireNonNull(serverType);
@@ -933,9 +1126,45 @@ public final class OpenTelemetryMetricsCollector implements MetricsCollector {
 	}
 
 	@NonNull
-	private static Attributes mcpSessionAttributes(@NonNull Class<? extends McpEndpoint> endpointClass) {
-		requireNonNull(endpointClass);
-		return Attributes.of(MCP_ENDPOINT_CLASS_ATTRIBUTE_KEY, endpointClass.getName());
+	private static Attributes mcpEndpointMethodAttributes(@NonNull String endpointPath,
+																							@NonNull String jsonRpcMethod) {
+		requireNonNull(endpointPath);
+		requireNonNull(jsonRpcMethod);
+		return Attributes.of(
+				MCP_ENDPOINT_ATTRIBUTE_KEY, endpointPath,
+				RPC_METHOD_ATTRIBUTE_KEY, jsonRpcMethod);
+	}
+
+	@NonNull
+	private static Attributes mcpRequestAttributes(@NonNull String endpointPath,
+																			@NonNull String jsonRpcMethod,
+																			@NonNull Enum<?> outcome) {
+		requireNonNull(outcome);
+		return Attributes.builder()
+				.putAll(mcpEndpointMethodAttributes(endpointPath, jsonRpcMethod))
+				.put(MCP_REQUEST_OUTCOME_ATTRIBUTE_KEY, enumValue(outcome))
+				.build();
+	}
+
+	@NonNull
+	private static Attributes mcpRequestStreamAttributes(@NonNull String endpointPath,
+																						@NonNull String jsonRpcMethod,
+																						@NonNull Enum<?> reason) {
+		requireNonNull(reason);
+		return Attributes.builder()
+				.putAll(mcpEndpointMethodAttributes(endpointPath, jsonRpcMethod))
+				.put(MCP_STREAM_TERMINATION_REASON_ATTRIBUTE_KEY, enumValue(reason))
+				.build();
+	}
+
+	@NonNull
+	private static Attributes mcpSubscriptionAttributes(@NonNull String endpointPath,
+																					@NonNull Enum<?> reason) {
+		requireNonNull(endpointPath);
+		requireNonNull(reason);
+		return Attributes.of(
+				MCP_ENDPOINT_ATTRIBUTE_KEY, endpointPath,
+				MCP_SUBSCRIPTION_TERMINATION_REASON_ATTRIBUTE_KEY, enumValue(reason));
 	}
 
 	@NonNull
@@ -1052,6 +1281,11 @@ public final class OpenTelemetryMetricsCollector implements MetricsCollector {
 	private static double seconds(@NonNull Duration duration) {
 		requireNonNull(duration);
 		return duration.toNanos() / 1_000_000_000D;
+	}
+
+	private static double safeSeconds(@NonNull Duration duration) {
+		requireNonNull(duration);
+		return duration.getSeconds() + duration.getNano() / 1_000_000_000D;
 	}
 
 	/**

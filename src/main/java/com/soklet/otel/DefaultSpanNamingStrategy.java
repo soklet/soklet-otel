@@ -16,8 +16,8 @@
 
 package com.soklet.otel;
 
-import com.soklet.McpEndpoint;
-import com.soklet.McpSseStream;
+import com.soklet.McpMetricsEvent;
+import com.soklet.McpRequestContext;
 import com.soklet.Request;
 import com.soklet.ResourceMethod;
 import com.soklet.SseConnection;
@@ -26,6 +26,7 @@ import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
 
 import javax.annotation.concurrent.ThreadSafe;
+import java.util.Set;
 
 import static java.util.Objects.requireNonNull;
 
@@ -36,6 +37,11 @@ import static java.util.Objects.requireNonNull;
 final class DefaultSpanNamingStrategy implements SpanNamingStrategy {
 	@NonNull
 	private static final DefaultSpanNamingStrategy DEFAULT_INSTANCE = new DefaultSpanNamingStrategy();
+	@NonNull
+	private static final Set<@NonNull String> BOUNDED_MCP_JSON_RPC_METHODS = Set.of(
+			"server/discover", "tools/list", "tools/call", "prompts/list",
+			"prompts/get", "resources/list", "resources/templates/list",
+			"resources/read", "subscriptions/listen", "notifications/cancelled");
 
 	@NonNull
 	public static DefaultSpanNamingStrategy defaultInstance() {
@@ -75,20 +81,17 @@ final class DefaultSpanNamingStrategy implements SpanNamingStrategy {
 
 	@Override
 	@NonNull
-	public String mcpRequestSpanName(@NonNull Request request,
-																 @NonNull Class<? extends McpEndpoint> endpointClass,
-																 @NonNull String jsonRpcMethod) {
-		requireNonNull(request);
-		requireNonNull(endpointClass);
-		requireNonNull(jsonRpcMethod);
-
-		return "MCP %s".formatted(jsonRpcMethod);
+	public String mcpRequestSpanName(@NonNull McpRequestContext context) {
+		requireNonNull(context);
+		return "MCP %s".formatted(boundedMcpJsonRpcMethod(
+				context.getJsonRpcMethod()));
 	}
 
-	@Override
 	@NonNull
-	public String mcpSseStreamSpanName(@NonNull McpSseStream stream) {
-		requireNonNull(stream);
-		return "MCP SSE %s".formatted(stream.getEndpointClass().getSimpleName());
+	static String boundedMcpJsonRpcMethod(@NonNull String jsonRpcMethod) {
+		return BOUNDED_MCP_JSON_RPC_METHODS.contains(
+				requireNonNull(jsonRpcMethod))
+				? jsonRpcMethod : McpMetricsEvent.UNRECOGNIZED_JSON_RPC_METHOD;
 	}
+
 }

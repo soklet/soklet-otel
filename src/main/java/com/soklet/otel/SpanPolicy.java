@@ -51,10 +51,6 @@ public final class SpanPolicy {
 	@NonNull
 	private final Boolean recordMcpRequestSpans;
 	@NonNull
-	private final Boolean recordMcpSessionEvents;
-	@NonNull
-	private final Boolean recordMcpSseStreamSpans;
-	@NonNull
 	private final Boolean recordClientAddress;
 	@NonNull
 	private final Boolean recordRequestId;
@@ -77,8 +73,6 @@ public final class SpanPolicy {
 		this.recordSseConnectionSpans = builder.recordSseConnectionSpans;
 		this.recordSseWriteEvents = builder.recordSseWriteEvents;
 		this.recordMcpRequestSpans = builder.recordMcpRequestSpans;
-		this.recordMcpSessionEvents = builder.recordMcpSessionEvents;
-		this.recordMcpSseStreamSpans = builder.recordMcpSseStreamSpans;
 		this.recordClientAddress = builder.recordClientAddress;
 		this.recordRequestId = builder.recordRequestId;
 	}
@@ -109,16 +103,6 @@ public final class SpanPolicy {
 	}
 
 	@NonNull
-	public Boolean recordMcpSessionEvents() {
-		return this.recordMcpSessionEvents;
-	}
-
-	@NonNull
-	public Boolean recordMcpSseStreamSpans() {
-		return this.recordMcpSseStreamSpans;
-	}
-
-	@NonNull
 	public Boolean recordClientAddress() {
 		return this.recordClientAddress;
 	}
@@ -131,10 +115,9 @@ public final class SpanPolicy {
 	@Override
 	@NonNull
 	public String toString() {
-		return format("%s{recordHttpRequestSpans=%s, recordStreamingResponseSpans=%s, recordSseConnectionSpans=%s, recordSseWriteEvents=%s, recordMcpRequestSpans=%s, recordMcpSessionEvents=%s, recordMcpSseStreamSpans=%s, recordClientAddress=%s, recordRequestId=%s}",
+		return format("%s{recordHttpRequestSpans=%s, recordStreamingResponseSpans=%s, recordSseConnectionSpans=%s, recordSseWriteEvents=%s, recordMcpRequestSpans=%s, recordClientAddress=%s, recordRequestId=%s}",
 				getClass().getSimpleName(), recordHttpRequestSpans(), recordStreamingResponseSpans(), recordSseConnectionSpans(),
-				recordSseWriteEvents(), recordMcpRequestSpans(), recordMcpSessionEvents(),
-				recordMcpSseStreamSpans(), recordClientAddress(), recordRequestId());
+				recordSseWriteEvents(), recordMcpRequestSpans(), recordClientAddress(), recordRequestId());
 	}
 
 	@Override
@@ -150,8 +133,6 @@ public final class SpanPolicy {
 				&& Objects.equals(recordSseConnectionSpans(), spanPolicy.recordSseConnectionSpans())
 				&& Objects.equals(recordSseWriteEvents(), spanPolicy.recordSseWriteEvents())
 				&& Objects.equals(recordMcpRequestSpans(), spanPolicy.recordMcpRequestSpans())
-				&& Objects.equals(recordMcpSessionEvents(), spanPolicy.recordMcpSessionEvents())
-				&& Objects.equals(recordMcpSseStreamSpans(), spanPolicy.recordMcpSseStreamSpans())
 				&& Objects.equals(recordClientAddress(), spanPolicy.recordClientAddress())
 				&& Objects.equals(recordRequestId(), spanPolicy.recordRequestId());
 	}
@@ -159,8 +140,7 @@ public final class SpanPolicy {
 	@Override
 	public int hashCode() {
 		return Objects.hash(recordHttpRequestSpans(), recordStreamingResponseSpans(), recordSseConnectionSpans(),
-				recordSseWriteEvents(), recordMcpRequestSpans(), recordMcpSessionEvents(),
-				recordMcpSseStreamSpans(), recordClientAddress(), recordRequestId());
+				recordSseWriteEvents(), recordMcpRequestSpans(), recordClientAddress(), recordRequestId());
 	}
 
 	/**
@@ -179,10 +159,6 @@ public final class SpanPolicy {
 		@NonNull
 		private Boolean recordMcpRequestSpans;
 		@NonNull
-		private Boolean recordMcpSessionEvents;
-		@NonNull
-		private Boolean recordMcpSseStreamSpans;
-		@NonNull
 		private Boolean recordClientAddress;
 		@NonNull
 		private Boolean recordRequestId;
@@ -193,8 +169,6 @@ public final class SpanPolicy {
 			this.recordSseConnectionSpans = true;
 			this.recordSseWriteEvents = false;
 			this.recordMcpRequestSpans = true;
-			this.recordMcpSessionEvents = true;
-			this.recordMcpSseStreamSpans = true;
 			this.recordClientAddress = false;
 			this.recordRequestId = false;
 		}
@@ -226,18 +200,6 @@ public final class SpanPolicy {
 		@NonNull
 		public Builder recordMcpRequestSpans(@NonNull Boolean recordMcpRequestSpans) {
 			this.recordMcpRequestSpans = requireNonNull(recordMcpRequestSpans);
-			return this;
-		}
-
-		@NonNull
-		public Builder recordMcpSessionEvents(@NonNull Boolean recordMcpSessionEvents) {
-			this.recordMcpSessionEvents = requireNonNull(recordMcpSessionEvents);
-			return this;
-		}
-
-		@NonNull
-		public Builder recordMcpSseStreamSpans(@NonNull Boolean recordMcpSseStreamSpans) {
-			this.recordMcpSseStreamSpans = requireNonNull(recordMcpSseStreamSpans);
 			return this;
 		}
 

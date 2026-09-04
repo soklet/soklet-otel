@@ -18,11 +18,9 @@ package com.soklet.otel;
 
 import com.soklet.HttpMethod;
 import com.soklet.MarshaledResponse;
-import com.soklet.McpEndpoint;
 import com.soklet.McpJsonRpcError;
-import com.soklet.McpJsonRpcRequestId;
+import com.soklet.McpRequestContext;
 import com.soklet.McpRequestOutcome;
-import com.soklet.McpSseStream;
 import com.soklet.Request;
 import com.soklet.ResourceMethod;
 import com.soklet.ResourcePathDeclaration;
@@ -54,6 +52,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.Comparator;
 import java.util.List;
@@ -80,13 +79,6 @@ public class OpenTelemetryLifecycleObserverTests {
 	private static final AttributeKey<String> CLIENT_ADDRESS_ATTRIBUTE_KEY = AttributeKey.stringKey("client.address");
 	private static final AttributeKey<String> REQUEST_ID_ATTRIBUTE_KEY = AttributeKey.stringKey("soklet.request.id");
 	private static final AttributeKey<String> STREAM_TERMINATION_REASON_ATTRIBUTE_KEY = AttributeKey.stringKey("soklet.stream.termination.reason");
-	private static final AttributeKey<String> RPC_SYSTEM_ATTRIBUTE_KEY = AttributeKey.stringKey("rpc.system");
-	private static final AttributeKey<String> RPC_METHOD_ATTRIBUTE_KEY = AttributeKey.stringKey("rpc.method");
-	private static final AttributeKey<String> MCP_ENDPOINT_CLASS_ATTRIBUTE_KEY = AttributeKey.stringKey("soklet.mcp.endpoint.class");
-	private static final AttributeKey<Boolean> MCP_SESSION_ID_PRESENT_ATTRIBUTE_KEY = AttributeKey.booleanKey("soklet.mcp.session.id.present");
-	private static final AttributeKey<Boolean> MCP_REQUEST_ID_PRESENT_ATTRIBUTE_KEY = AttributeKey.booleanKey("soklet.mcp.request.id.present");
-	private static final AttributeKey<String> MCP_REQUEST_OUTCOME_ATTRIBUTE_KEY = AttributeKey.stringKey("soklet.mcp.request.outcome");
-	private static final AttributeKey<Long> MCP_JSON_RPC_ERROR_CODE_ATTRIBUTE_KEY = AttributeKey.longKey("rpc.jsonrpc.error_code");
 
 	@Test
 	public void httpSpanUsesRemoteParentAndStandardAttributes() throws Exception {
@@ -190,6 +182,8 @@ public class OpenTelemetryLifecycleObserverTests {
 		SpanData span = onlySpan(harness);
 		Assertions.assertEquals("00f067aa0ba902b7", span.getParentSpanContext().getTraceState().get("rojo"));
 		Assertions.assertEquals("t61rcWkgMzE", span.getParentSpanContext().getTraceState().get("congo"));
+		Assertions.assertEquals(List.of("rojo", "congo"), List.copyOf(
+				span.getParentSpanContext().getTraceState().asMap().keySet()));
 	}
 
 	@Test
@@ -353,54 +347,49 @@ public class OpenTelemetryLifecycleObserverTests {
 	}
 
 	@Test
-	public void mcpJsonRpcSpanRecordsOutcomeAndErrors() {
-		TestHarness harness = TestHarness.create();
-		OpenTelemetryLifecycleObserver observer = OpenTelemetryLifecycleObserver
-				.withOpenTelemetry(harness.openTelemetrySdk())
-				.build();
-		Request request = tracedRequest(HttpMethod.POST, "/mcp");
+	public void legacyMcpSessionTracingSurfacesRemainAbsentAndModernRequestCallbacksAreImplemented()
+			throws Exception {
+		Set<String> forbiddenObserverMethods = Set.of(
+				"didCreateMcpSession",
+				"didTerminateMcpSession",
+				"didEstablishMcpSseStream",
+				"didTerminateMcpSseStream");
+		Set<String> declaredObserverMethods = Arrays.stream(
+				OpenTelemetryLifecycleObserver.class.getDeclaredMethods())
+				.map(Method::getName)
+				.collect(java.util.stream.Collectors.toSet());
+		Assertions.assertTrue(java.util.Collections.disjoint(
+				forbiddenObserverMethods, declaredObserverMethods));
 
-		observer.didStartMcpRequestHandling(request, TestMcpEndpoint.class, "session-1", "tools/call",
-				McpJsonRpcRequestId.fromString("1"));
-		observer.didFinishMcpRequestHandling(request, TestMcpEndpoint.class, "session-1", "tools/call",
-				McpJsonRpcRequestId.fromString("1"), McpRequestOutcome.JSON_RPC_ERROR,
-				McpJsonRpcError.fromCodeAndMessage(-32603, "Internal error"), Duration.ofMillis(10), List.of());
-
-		SpanData span = onlySpan(harness);
-		Assertions.assertEquals("MCP tools/call", span.getName());
-		Assertions.assertEquals(SpanKind.SERVER, span.getKind());
-		Assertions.assertEquals("mcp", span.getAttributes().get(SERVER_TYPE_ATTRIBUTE_KEY));
-		Assertions.assertEquals("jsonrpc", span.getAttributes().get(RPC_SYSTEM_ATTRIBUTE_KEY));
-		Assertions.assertEquals("tools/call", span.getAttributes().get(RPC_METHOD_ATTRIBUTE_KEY));
-		Assertions.assertEquals(TestMcpEndpoint.class.getName(), span.getAttributes().get(MCP_ENDPOINT_CLASS_ATTRIBUTE_KEY));
-		Assertions.assertEquals(Boolean.TRUE, span.getAttributes().get(MCP_SESSION_ID_PRESENT_ATTRIBUTE_KEY));
-		Assertions.assertEquals(Boolean.TRUE, span.getAttributes().get(MCP_REQUEST_ID_PRESENT_ATTRIBUTE_KEY));
-		Assertions.assertEquals("json_rpc_error", span.getAttributes().get(MCP_REQUEST_OUTCOME_ATTRIBUTE_KEY));
-		Assertions.assertEquals(-32603L, requireNonNull(span.getAttributes().get(MCP_JSON_RPC_ERROR_CODE_ATTRIBUTE_KEY)));
-		Assertions.assertEquals(StatusCode.ERROR, span.getStatus().getStatusCode());
-	}
-
-	@Test
-	public void mcpSseStreamSpanEndsWithTerminationReason() {
-		TestHarness harness = TestHarness.create();
-		OpenTelemetryLifecycleObserver observer = OpenTelemetryLifecycleObserver
-				.withOpenTelemetry(harness.openTelemetrySdk())
-				.build();
-		Request request = tracedRequest(HttpMethod.GET, "/mcp");
-		TestMcpSseStream stream = new TestMcpSseStream(request, TestMcpEndpoint.class, "session-1", Instant.now());
-
-		observer.didEstablishMcpSseStream(stream);
-		Assertions.assertEquals(Integer.valueOf(1), observer.getActiveSpanCount());
-		observer.didTerminateMcpSseStream(stream, StreamTermination.with(StreamTerminationReason.SESSION_TERMINATED, Duration.ZERO).build());
-
-		SpanData span = onlySpan(harness);
-		Assertions.assertEquals("MCP SSE TestMcpEndpoint", span.getName());
-		Assertions.assertEquals(SpanKind.SERVER, span.getKind());
-		Assertions.assertEquals("mcp", span.getAttributes().get(SERVER_TYPE_ATTRIBUTE_KEY));
-		Assertions.assertEquals(TestMcpEndpoint.class.getName(), span.getAttributes().get(MCP_ENDPOINT_CLASS_ATTRIBUTE_KEY));
-		Assertions.assertEquals("session_terminated", span.getAttributes().get(STREAM_TERMINATION_REASON_ATTRIBUTE_KEY));
-		Assertions.assertEquals(StatusCode.UNSET, span.getStatus().getStatusCode());
-		Assertions.assertEquals(Integer.valueOf(0), observer.getActiveSpanCount());
+		Method modernStart = OpenTelemetryLifecycleObserver.class.getMethod(
+				"didStartMcpRequestHandling", McpRequestContext.class);
+		Assertions.assertEquals(OpenTelemetryLifecycleObserver.class,
+				modernStart.getDeclaringClass(),
+				"Modern admitted-request span start is implemented directly.");
+		Method modernFinish = OpenTelemetryLifecycleObserver.class.getMethod(
+				"didFinishMcpRequestHandling", McpRequestContext.class,
+				McpRequestOutcome.class, McpJsonRpcError.class, Duration.class,
+				List.class);
+		Assertions.assertEquals(OpenTelemetryLifecycleObserver.class,
+				modernFinish.getDeclaringClass(),
+				"Modern admitted-request span finish is implemented directly.");
+		Assertions.assertEquals(Set.of("recordMcpRequestSpans"),
+				Arrays.stream(SpanPolicy.class.getDeclaredMethods())
+						.map(Method::getName)
+						.filter(name -> name.contains("Mcp"))
+						.collect(java.util.stream.Collectors.toSet()));
+		Assertions.assertEquals(Set.of("recordMcpRequestSpans"),
+				Arrays.stream(SpanPolicy.Builder.class.getDeclaredMethods())
+						.map(Method::getName)
+						.filter(name -> name.contains("Mcp"))
+						.collect(java.util.stream.Collectors.toSet()));
+		Assertions.assertEquals(Set.of("mcpRequestSpanName"),
+				Arrays.stream(SpanNamingStrategy.class.getDeclaredMethods())
+						.map(Method::getName)
+						.filter("mcpRequestSpanName"::equals)
+						.collect(java.util.stream.Collectors.toSet()));
+		Assertions.assertTrue(SpanPolicy.defaultInstance().toString()
+				.contains("recordMcpRequestSpans=true"));
 	}
 
 	@Test
@@ -552,10 +541,6 @@ public class OpenTelemetryLifecycleObserverTests {
 		}
 	}
 
-	private static final class TestMcpEndpoint implements McpEndpoint {
-		// Marker type
-	}
-
 	private record TestStreamingResponseHandle(
 			@NonNull Request request,
 			@NonNull ResourceMethod resourceMethod,
@@ -636,41 +621,4 @@ public class OpenTelemetryLifecycleObserverTests {
 		}
 	}
 
-	private record TestMcpSseStream(
-			@NonNull Request request,
-			@NonNull Class<? extends McpEndpoint> endpointClass,
-			@NonNull String sessionId,
-			@NonNull Instant establishedAt
-	) implements McpSseStream {
-		private TestMcpSseStream {
-			requireNonNull(request);
-			requireNonNull(endpointClass);
-			requireNonNull(sessionId);
-			requireNonNull(establishedAt);
-		}
-
-		@Override
-		@NonNull
-		public Request getRequest() {
-			return this.request;
-		}
-
-		@Override
-		@NonNull
-		public Class<? extends McpEndpoint> getEndpointClass() {
-			return this.endpointClass;
-		}
-
-		@Override
-		@NonNull
-		public String getSessionId() {
-			return this.sessionId;
-		}
-
-		@Override
-		@NonNull
-		public Instant getEstablishedAt() {
-			return this.establishedAt;
-		}
-	}
 }

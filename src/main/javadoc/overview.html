@@ -23,8 +23,167 @@
     <a href="https://javadoc.io/doc/io.opentelemetry/opentelemetry-api/1.59.0/io/opentelemetry/api/metrics/Meter.html"><code>Meter</code></a>
     and <code>Tracer</code> instances.
     <br/><br/>
-    By default, standard HTTP metrics use OpenTelemetry Semantic Convention names, while Soklet-specific metrics are emitted for concepts such as Server-Sent Events. Trace spans use Soklet's parsed W3C trace context as the remote parent when available.
+    By default, standard HTTP metrics use OpenTelemetry Semantic Convention names, while Soklet-specific metrics
+    are emitted for concepts such as Server-Sent Events and MCP. HTTP, streaming-response, and SSE spans use
+    Soklet's parsed HTTP W3C trace context as the remote parent when available; admitted MCP request spans use
+    only validated trace context carried in MCP metadata.
     <br/><br/>
+    Version <code>2.0.0</code> targets provided Soklet <code>4.0.0</code>. The prior soklet-otel 1.3.1 release
+    targets Soklet 3.5.1.
+    <h2>MCP metrics in 2.0.0</h2>
+    All 23 modern <code>McpMetricsEvent</code> variants map to exactly 21 dedicated MCP instruments plus the
+    existing shared transport-failure instrument. Dedicated MCP names are independent of the HTTP metric naming
+    strategy.
+    <table>
+      <caption>Exact MCP OpenTelemetry instrument contract</caption>
+      <thead>
+        <tr><th>Instrument</th><th>Kind and unit</th><th>Attributes</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>soklet.mcp.server.starts</code></td><td>Counter, <code>{start}</code></td><td>None</td></tr>
+        <tr><td><code>soklet.mcp.shutdowns</code></td><td>Counter, <code>{shutdown}</code></td><td><code>soklet.mcp.shutdown.outcome</code></td></tr>
+        <tr><td><code>soklet.mcp.connections.accepted</code></td><td>Counter, <code>{connection}</code></td><td>None</td></tr>
+        <tr><td><code>soklet.mcp.connections.rejected</code></td><td>Counter, <code>{connection}</code></td><td>None</td></tr>
+        <tr><td><code>soklet.mcp.requests.accepted</code></td><td>Counter, <code>{request}</code></td><td>None</td></tr>
+        <tr><td><code>soklet.mcp.requests.rejected</code></td><td>Counter, <code>{request}</code></td><td>None</td></tr>
+        <tr><td><code>soklet.mcp.requests.active</code></td><td>Up-down counter, <code>{request}</code></td><td>None</td></tr>
+        <tr><td><code>soklet.mcp.requests.completed</code></td><td>Counter, <code>{request}</code></td><td><code>soklet.mcp.endpoint</code>, <code>rpc.method</code>, <code>soklet.mcp.request.outcome</code></td></tr>
+        <tr><td><code>soklet.mcp.request.duration</code></td><td>Histogram, <code>s</code></td><td><code>soklet.mcp.endpoint</code>, <code>rpc.method</code>, <code>soklet.mcp.request.outcome</code></td></tr>
+        <tr><td><code>soklet.mcp.request.streams.active</code></td><td>Up-down counter, <code>{stream}</code></td><td>None</td></tr>
+        <tr><td><code>soklet.mcp.request.stream.duration</code></td><td>Histogram, <code>s</code></td><td><code>soklet.mcp.endpoint</code>, <code>rpc.method</code>, <code>soklet.mcp.stream.termination.reason</code></td></tr>
+        <tr><td><code>soklet.mcp.subscriptions.active</code></td><td>Up-down counter, <code>{subscription}</code></td><td>None</td></tr>
+        <tr><td><code>soklet.mcp.subscription.duration</code></td><td>Histogram, <code>s</code></td><td><code>soklet.mcp.endpoint</code>, <code>soklet.mcp.subscription.termination.reason</code></td></tr>
+        <tr><td><code>soklet.mcp.cancelations.signaled</code></td><td>Counter, <code>{cancelation}</code></td><td><code>soklet.mcp.endpoint</code>, <code>rpc.method</code></td></tr>
+        <tr><td><code>soklet.mcp.progress.emitted</code></td><td>Counter, <code>{notification}</code></td><td><code>soklet.mcp.endpoint</code>, <code>rpc.method</code></td></tr>
+        <tr><td><code>soklet.mcp.keepalives.emitted</code></td><td>Counter, <code>{comment}</code></td><td>None</td></tr>
+        <tr><td><code>soklet.mcp.protocol.errors</code></td><td>Counter, <code>{error}</code></td><td><code>rpc.jsonrpc.error_code</code></td></tr>
+        <tr><td><code>soklet.mcp.unknown.mirrored.headers</code></td><td>Counter, <code>{header}</code></td><td><code>soklet.mcp.endpoint</code>, <code>rpc.method</code></td></tr>
+        <tr><td><code>soklet.mcp.handler.executions.active</code></td><td>Up-down counter, <code>{handler}</code></td><td>None</td></tr>
+        <tr><td><code>soklet.mcp.handler.queue.depth</code></td><td>Up-down counter, <code>{request}</code></td><td>None</td></tr>
+        <tr><td><code>soklet.mcp.handler.capacity.rejections</code></td><td>Counter, <code>{request}</code></td><td>None</td></tr>
+        <tr><td><code>soklet.server.transport.failures</code></td><td>Counter, <code>{failure}</code></td><td><code>soklet.server.type=mcp</code>, <code>soklet.failure.reason</code></td></tr>
+      </tbody>
+    </table>
+    <p>
+      The request-duration histogram advises finite second boundaries
+      <code>[.001,.002,.005,.01,.025,.05,.1,.2,.4,.8,1.5,3,7,15]</code>.
+      Request-stream and subscription histograms advise
+      <code>[1,5,10,30,60,120,300,600,1800,3600,7200,14400]</code>;
+      the SDK supplies the overflow bucket.
+    </p>
+    <p>Enum-backed values are lower-snake case with these fixed vocabularies:</p>
+    <ul>
+      <li>Shutdown: <code>not_started</code>, <code>graceful_termination</code>,
+        <code>forced_termination</code>, <code>unexpected_termination</code>,
+        <code>residual_activity</code>, <code>termination_unknown</code>.</li>
+      <li>Request: <code>complete</code>, <code>input_required</code>, <code>rejected</code>,
+        <code>application_error</code>, <code>protocol_error</code>, <code>internal_error</code>,
+        <code>canceled</code>, <code>deadline_exceeded</code>, <code>client_disconnected</code>,
+        <code>write_failed</code>.</li>
+      <li>Request stream and subscription: <code>completed</code>, <code>client_disconnected</code>,
+        <code>request_canceled</code>, <code>deadline_exceeded</code>, <code>write_failed</code>,
+        <code>backpressure</code>, <code>server_stopped</code>,
+        <code>simulator_capture_item_limit_exceeded</code>, <code>simulator_capture_byte_limit_exceeded</code>,
+        <code>internal_error</code>.</li>
+      <li>Transport failure: <code>request_read_timeout</code>, <code>request_too_large</code>,
+        <code>malformed_request</code>, <code>read_error</code>, <code>write_error</code>,
+        <code>response_write_idle_timeout</code>, <code>response_ready_error</code>,
+        <code>request_read_timeout_error</code>, <code>response_write_idle_timeout_error</code>,
+        <code>accept_loop_error</code>, <code>connection_setup_error</code>, <code>task_error</code>,
+        <code>timeout_task_error</code>, <code>selection_key_error</code>, <code>register_error</code>,
+        <code>write_timeout</code>, <code>event_loop_terminated</code>, <code>unknown</code>.</li>
+    </ul>
+    <p>
+      Framework-produced dimensions are bounded to registered endpoint paths, recognized methods or
+      <code>&lt;unrecognized&gt;</code>, fixed lower-snake enum values, and protocol-error codes
+      <code>-32700,-32600,-32601,-32602,-32603,-32020,-32021,-32022,-31999,-31998</code>.
+      Manually constructed events remain application-controlled, and OpenTelemetry SDK views/readers/exporters
+      own their retention. For framework-produced events, the integration adds no dedicated attributes for
+      request or payload data, header names or values, request IDs, trace or parent IDs, trace-correlation tokens
+      or key IDs, <code>tracestate</code>, baggage, throwable material, or <code>error.type</code>. Applications
+      control values placed in public dimensions by manually constructed events; those values can contain
+      sensitive text, so applications own both their confidentiality and cardinality. The integration does not
+      promise core snapshot/reset/filter, configured-zero, or cross-instrument atomicity semantics.
+    </p>
+    <h2>MCP request spans in 2.0.0</h2>
+    <p>
+      When an application installs <code>OpenTelemetryLifecycleObserver</code>, the default-on
+      <code>SpanPolicy.recordMcpRequestSpans()</code> creates one <code>SERVER</code> span for each admitted MCP
+      request or notification. The span starts with semantic handling and remains open through the exact
+      client-visible terminal outcome, including request-stream and subscription lifetimes. Preadmission failures
+      have no span, and there is no separate MCP session, request-stream, or subscription span.
+    </p>
+    <p>
+      The only remote-parent source is validated <code>McpRequestContext.getTraceContext()</code> metadata. Its
+      trace ID, parent ID, flags, and <code>tracestate</code> are preserved. Missing or invalid metadata yields a
+      root span; physical HTTP trace context, current OpenTelemetry context, links, and baggage are never fallback
+      parents. Raw trace identity remains parent/span identity and is not duplicated into attributes or events.
+    </p>
+    <p>
+      The default name is <code>MCP &lt;method&gt;</code>. Both it and <code>rpc.method</code> accept the exact bounded
+      live vocabulary <code>server/discover</code>, <code>tools/list</code>, <code>tools/call</code>,
+      <code>prompts/list</code>, <code>prompts/get</code>, <code>resources/list</code>,
+      <code>resources/templates/list</code>, <code>resources/read</code>,
+      <code>subscriptions/listen</code>, and <code>notifications/cancelled</code>; every other value becomes
+      <code>&lt;unrecognized&gt;</code>, and no <code>rpc.method_original</code> is emitted. A custom naming strategy
+      receives the full context, so the application owns custom-name confidentiality and cardinality.
+    </p>
+    <table>
+      <caption>Exact MCP span projection</caption>
+      <thead><tr><th>Phase</th><th>Attributes and status</th></tr></thead>
+      <tbody>
+        <tr><td>Start</td><td><code>soklet.server.type=mcp</code>, <code>rpc.system.name=jsonrpc</code>,
+          bounded <code>rpc.method</code>, registered <code>soklet.mcp.endpoint</code></td></tr>
+        <tr><td>Terminal, error object present</td><td>Lower-snake <code>soklet.mcp.request.outcome</code>;
+          decimal string code in <code>rpc.response.status_code</code> and <code>error.type</code>;
+          status <code>ERROR</code></td></tr>
+        <tr><td>Terminal, no error object</td><td><code>rejected</code>, <code>application_error</code>,
+          <code>protocol_error</code>, <code>internal_error</code>, <code>deadline_exceeded</code>, and
+          <code>write_failed</code> use <code>ERROR</code> plus outcome-valued <code>error.type</code>;
+          <code>complete</code>, <code>input_required</code>, <code>canceled</code>, and
+          <code>client_disconnected</code> remain <code>UNSET</code> without <code>error.type</code></td></tr>
+      </tbody>
+    </table>
+    <p>
+      MCP spans never set status <code>OK</code> or a status description and emit no span events. JSON-RPC error
+      message/data, lifecycle throwables, baggage, raw request IDs, operation data, and client metadata are not
+      exported. Explicit-default-false <code>recordClientAddress</code> and <code>recordRequestId</code> policy
+      opt-ins may add only <code>client.address</code> and Soklet's server-generated
+      <code>soklet.request.id</code>; they never expose the MCP JSON-RPC request ID. Application-supplied custom
+      names and error codes, SDK sampling/export/retention, and opt-in values remain operator-owned.
+    </p>
+    <h2>MCP tracing migration</h2>
+    <p>
+      The legacy <code>soklet.mcp.sessions.*</code> and <code>soklet.mcp.session.duration</code> instruments and
+      observer callbacks <code>didCreateMcpSession</code>, <code>didTerminateMcpSession</code>,
+      <code>didEstablishMcpSseStream</code>, and <code>didTerminateMcpSseStream</code> are removed. The
+      <code>SpanPolicy.recordMcpSessionEvents</code> and <code>recordMcpSseStreamSpans</code> controls and their
+      builder setters are also removed. <code>recordMcpRequestSpans</code> remains with modern admitted-request
+      semantics. The default <code>SpanNamingStrategy.mcpRequestSpanName(McpRequestContext)</code> replaces the old
+      request-shaped method; custom strategies do not need to implement it. The legacy MCP-SSE naming method is
+      absent, and old MCP naming overrides are no longer invoked.
+    </p>
+    <p>
+      Relative to released 1.3.1, the verified 2.0.0 public API delta is 13 removals and 4 additions. The four additions
+      are the modern metric callback, modern request start and finish callbacks, and context-shaped naming method;
+      the 13 removals include the two legacy session-policy controls named above. The 2.0.0 release verification contract runs the
+      complete module and Javadoc build against exact Soklet 4.0.0.
+    </p>
+    <p>
+      The exact V20 span contract is exercised by
+      <code>OpenTelemetryMcpLifecycleObserverTests#mcpMetadataTraceContextIsTheOnlyRemoteParentAndPreservesTraceState</code>,
+      <code>#mcpSpanUsesExactDefaultAndCustomNamesAttributesAndTerminalSemantics</code>,
+      <code>#allMcpRequestOutcomesMapToExactStatusAndErrorVocabulary</code>,
+      <code>#mcpRequestSpanStaysOpenUntilTerminalFinishAcrossStreamAndSubscriptionLifetimes</code>,
+      <code>#mcpPolicyAndNamingAreModernAdditiveAndLegacySessionControlsRemainAbsent</code>,
+      <code>#mcpTelemetryFailuresAreContainedAndReleaseStateExactlyOnce</code>,
+      <code>#concurrentMcpSpansRemainContextIsolatedAndCloseDrainsEveryState</code>, and
+      <code>#mcpSpanProjectionExcludesSensitiveContextAndHttpFallbackCanaries</code>.
+      <code>OpenTelemetryLifecycleObserverTests#legacyMcpSessionTracingSurfacesRemainAbsentAndModernRequestCallbacksAreImplemented</code>
+      freezes the public boundary. The focused selection is green at 23 tests; all 36 module tests pass on
+      JDK 17, 21, and 25, and offline package/source/Javadoc assembly plus standalone Javadoc generation are green.
+    </p>
+    <br/>
     <strong>Please refer to the official documentation at <a href="https://www.soklet.com" target="_blank">https://www.soklet.com</a>.</strong>
     <br/><br/>
   </body>

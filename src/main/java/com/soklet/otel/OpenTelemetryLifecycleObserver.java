@@ -18,11 +18,9 @@ package com.soklet.otel;
 
 import com.soklet.LifecycleObserver;
 import com.soklet.MarshaledResponse;
-import com.soklet.McpEndpoint;
 import com.soklet.McpJsonRpcError;
-import com.soklet.McpJsonRpcRequestId;
+import com.soklet.McpRequestContext;
 import com.soklet.McpRequestOutcome;
-import com.soklet.McpSseStream;
 import com.soklet.Request;
 import com.soklet.ResourceMethod;
 import com.soklet.ServerType;
@@ -86,7 +84,8 @@ public final class OpenTelemetryLifecycleObserver implements LifecycleObserver, 
 	private static final String SERVER_TYPE_SSE;
 	@NonNull
 	private static final String SERVER_TYPE_MCP;
-
+	@NonNull
+	private static final String RPC_SYSTEM_JSON_RPC;
 	@NonNull
 	private static final AttributeKey<String> SERVER_TYPE_ATTRIBUTE_KEY;
 	@NonNull
@@ -106,20 +105,15 @@ public final class OpenTelemetryLifecycleObserver implements LifecycleObserver, 
 	@NonNull
 	private static final AttributeKey<String> STREAM_TERMINATION_REASON_ATTRIBUTE_KEY;
 	@NonNull
-	private static final AttributeKey<String> RPC_SYSTEM_ATTRIBUTE_KEY;
+	private static final AttributeKey<String> RPC_SYSTEM_NAME_ATTRIBUTE_KEY;
 	@NonNull
 	private static final AttributeKey<String> RPC_METHOD_ATTRIBUTE_KEY;
 	@NonNull
-	private static final AttributeKey<String> MCP_ENDPOINT_CLASS_ATTRIBUTE_KEY;
-	@NonNull
-	private static final AttributeKey<Boolean> MCP_SESSION_ID_PRESENT_ATTRIBUTE_KEY;
-	@NonNull
-	private static final AttributeKey<Boolean> MCP_REQUEST_ID_PRESENT_ATTRIBUTE_KEY;
+	private static final AttributeKey<String> MCP_ENDPOINT_ATTRIBUTE_KEY;
 	@NonNull
 	private static final AttributeKey<String> MCP_REQUEST_OUTCOME_ATTRIBUTE_KEY;
 	@NonNull
-	private static final AttributeKey<Long> MCP_JSON_RPC_ERROR_CODE_ATTRIBUTE_KEY;
-	@NonNull
+	private static final AttributeKey<String> RPC_RESPONSE_STATUS_CODE_ATTRIBUTE_KEY;
 	private static final AttributeKey<Boolean> SSE_CLIENT_CONTEXT_PRESENT_ATTRIBUTE_KEY;
 	@NonNull
 	private static final AttributeKey<String> SSE_PAYLOAD_TYPE_ATTRIBUTE_KEY;
@@ -132,6 +126,7 @@ public final class OpenTelemetryLifecycleObserver implements LifecycleObserver, 
 		SERVER_TYPE_HTTP = "http";
 		SERVER_TYPE_SSE = "server_sent_event";
 		SERVER_TYPE_MCP = "mcp";
+		RPC_SYSTEM_JSON_RPC = "jsonrpc";
 
 		SERVER_TYPE_ATTRIBUTE_KEY = AttributeKey.stringKey("soklet.server.type");
 		HTTP_METHOD_ATTRIBUTE_KEY = AttributeKey.stringKey("http.request.method");
@@ -142,13 +137,11 @@ public final class OpenTelemetryLifecycleObserver implements LifecycleObserver, 
 		CLIENT_ADDRESS_ATTRIBUTE_KEY = AttributeKey.stringKey("client.address");
 		REQUEST_ID_ATTRIBUTE_KEY = AttributeKey.stringKey("soklet.request.id");
 		STREAM_TERMINATION_REASON_ATTRIBUTE_KEY = AttributeKey.stringKey("soklet.stream.termination.reason");
-		RPC_SYSTEM_ATTRIBUTE_KEY = AttributeKey.stringKey("rpc.system");
+		RPC_SYSTEM_NAME_ATTRIBUTE_KEY = AttributeKey.stringKey("rpc.system.name");
 		RPC_METHOD_ATTRIBUTE_KEY = AttributeKey.stringKey("rpc.method");
-		MCP_ENDPOINT_CLASS_ATTRIBUTE_KEY = AttributeKey.stringKey("soklet.mcp.endpoint.class");
-		MCP_SESSION_ID_PRESENT_ATTRIBUTE_KEY = AttributeKey.booleanKey("soklet.mcp.session.id.present");
-		MCP_REQUEST_ID_PRESENT_ATTRIBUTE_KEY = AttributeKey.booleanKey("soklet.mcp.request.id.present");
+		MCP_ENDPOINT_ATTRIBUTE_KEY = AttributeKey.stringKey("soklet.mcp.endpoint");
 		MCP_REQUEST_OUTCOME_ATTRIBUTE_KEY = AttributeKey.stringKey("soklet.mcp.request.outcome");
-		MCP_JSON_RPC_ERROR_CODE_ATTRIBUTE_KEY = AttributeKey.longKey("rpc.jsonrpc.error_code");
+		RPC_RESPONSE_STATUS_CODE_ATTRIBUTE_KEY = AttributeKey.stringKey("rpc.response.status_code");
 		SSE_CLIENT_CONTEXT_PRESENT_ATTRIBUTE_KEY = AttributeKey.booleanKey("soklet.sse.client_context.present");
 		SSE_PAYLOAD_TYPE_ATTRIBUTE_KEY = AttributeKey.stringKey("soklet.sse.payload.type");
 		SSE_EVENT_TYPE_ATTRIBUTE_KEY = AttributeKey.stringKey("soklet.sse.event.type");
@@ -163,11 +156,11 @@ public final class OpenTelemetryLifecycleObserver implements LifecycleObserver, 
 	@NonNull
 	private final ConcurrentMap<IdentityKey<Request>, SpanState> httpRequestSpans;
 	@NonNull
-	private final ConcurrentMap<IdentityKey<Request>, SpanState> mcpRequestSpans;
+	private final ConcurrentMap<IdentityKey<McpRequestContext>, McpSpanState> mcpRequestSpans;
 	@NonNull
 	private final ConcurrentMap<IdentityKey<SseConnection>, SpanState> sseConnectionSpans;
-	@NonNull
-	private final ConcurrentMap<IdentityKey<McpSseStream>, SpanState> mcpSseStreamSpans;
+	@Nullable
+	private final Runnable beforeMcpSpanPublication;
 	@NonNull
 	private final AtomicBoolean closed;
 
@@ -207,7 +200,7 @@ public final class OpenTelemetryLifecycleObserver implements LifecycleObserver, 
 		this.httpRequestSpans = new ConcurrentHashMap<>();
 		this.mcpRequestSpans = new ConcurrentHashMap<>();
 		this.sseConnectionSpans = new ConcurrentHashMap<>();
-		this.mcpSseStreamSpans = new ConcurrentHashMap<>();
+		this.beforeMcpSpanPublication = builder.beforeMcpSpanPublication;
 		this.closed = new AtomicBoolean(false);
 	}
 
@@ -215,8 +208,7 @@ public final class OpenTelemetryLifecycleObserver implements LifecycleObserver, 
 	public Integer getActiveSpanCount() {
 		return this.httpRequestSpans.size()
 				+ this.mcpRequestSpans.size()
-				+ this.sseConnectionSpans.size()
-				+ this.mcpSseStreamSpans.size();
+				+ this.sseConnectionSpans.size();
 	}
 
 	@Override
@@ -225,9 +217,8 @@ public final class OpenTelemetryLifecycleObserver implements LifecycleObserver, 
 			return;
 
 		drain(this.httpRequestSpans);
-		drain(this.mcpRequestSpans);
+		drainMcpRequestSpans();
 		drain(this.sseConnectionSpans);
-		drain(this.mcpSseStreamSpans);
 	}
 
 	@Override
@@ -299,6 +290,74 @@ public final class OpenTelemetryLifecycleObserver implements LifecycleObserver, 
 			} finally {
 				if (!keepOpen && this.httpRequestSpans.remove(key, spanState))
 					endSpanSafely(spanState.span(), spanState.startedAt().plus(duration));
+			}
+		});
+	}
+
+	@Override
+	public void didStartMcpRequestHandling(@NonNull McpRequestContext context) {
+		requireNonNull(context);
+
+		if (this.closed.get() || !this.spanPolicy.recordMcpRequestSpans())
+			return;
+
+		safelyRun(() -> {
+			Instant startedAt = Instant.now();
+			Span span = this.tracer.spanBuilder(this.spanNamingStrategy.mcpRequestSpanName(context))
+					.setSpanKind(SpanKind.SERVER)
+					.setParent(parentContextFor(context.getTraceContext().orElse(null)))
+					.setStartTimestamp(startedAt)
+					.setAttribute(SERVER_TYPE_ATTRIBUTE_KEY, SERVER_TYPE_MCP)
+					.setAttribute(RPC_SYSTEM_NAME_ATTRIBUTE_KEY, RPC_SYSTEM_JSON_RPC)
+					.setAttribute(RPC_METHOD_ATTRIBUTE_KEY,
+							DefaultSpanNamingStrategy.boundedMcpJsonRpcMethod(
+									context.getJsonRpcMethod()))
+					.setAttribute(MCP_ENDPOINT_ATTRIBUTE_KEY, context.getEndpoint().getPath())
+					.startSpan();
+
+			try {
+				if (this.spanPolicy.recordClientAddress() || this.spanPolicy.recordRequestId())
+					setOptionalRequestAttributes(span, context.getRequest());
+
+				if (this.closed.get()) {
+					endSpanSafely(span);
+					return;
+				}
+
+				storeReplacingMcpRequestSpan(new IdentityKey<>(context),
+						new McpSpanState(span, startedAt));
+			} catch (RuntimeException e) {
+				endSpanSafely(span);
+				throw e;
+			}
+		});
+	}
+
+	@Override
+	public void didFinishMcpRequestHandling(@NonNull McpRequestContext context,
+			@NonNull McpRequestOutcome outcome,
+			@Nullable McpJsonRpcError error,
+			@NonNull Duration duration,
+			@NonNull List<@NonNull Throwable> throwables) {
+		requireNonNull(context);
+		requireNonNull(outcome);
+		requireNonNull(duration);
+		requireNonNull(throwables);
+
+		if (this.closed.get() || !this.spanPolicy.recordMcpRequestSpans())
+			return;
+
+		safelyRun(() -> {
+			McpSpanState spanState = this.mcpRequestSpans.remove(
+					new IdentityKey<>(context));
+
+			if (spanState == null)
+				return;
+
+			try {
+				applyMcpFinish(spanState.span(), outcome, error);
+			} finally {
+				endSpanSafely(spanState.span(), spanState.startedAt(), duration);
 			}
 		});
 	}
@@ -470,171 +529,6 @@ public final class OpenTelemetryLifecycleObserver implements LifecycleObserver, 
 		});
 	}
 
-	@Override
-	public void didStartMcpRequestHandling(@NonNull Request request,
-																				 @NonNull Class<? extends McpEndpoint> endpointClass,
-																				 @Nullable String sessionId,
-																				 @NonNull String jsonRpcMethod,
-																				 @Nullable McpJsonRpcRequestId jsonRpcRequestId) {
-		requireNonNull(request);
-		requireNonNull(endpointClass);
-		requireNonNull(jsonRpcMethod);
-
-		if (this.closed.get() || !this.spanPolicy.recordMcpRequestSpans())
-			return;
-
-		safelyRun(() -> {
-			Instant startedAt = Instant.now();
-			Span span = this.tracer.spanBuilder(this.spanNamingStrategy.mcpRequestSpanName(request, endpointClass, jsonRpcMethod))
-					.setSpanKind(SpanKind.SERVER)
-					.setParent(parentContextFor(request))
-					.setStartTimestamp(startedAt)
-					.setAttribute(SERVER_TYPE_ATTRIBUTE_KEY, SERVER_TYPE_MCP)
-					.setAttribute(RPC_SYSTEM_ATTRIBUTE_KEY, "jsonrpc")
-					.setAttribute(RPC_METHOD_ATTRIBUTE_KEY, jsonRpcMethod)
-					.setAttribute(MCP_ENDPOINT_CLASS_ATTRIBUTE_KEY, endpointClass.getName())
-					.setAttribute(MCP_SESSION_ID_PRESENT_ATTRIBUTE_KEY, sessionId != null)
-					.setAttribute(MCP_REQUEST_ID_PRESENT_ATTRIBUTE_KEY, jsonRpcRequestId != null)
-					.startSpan();
-
-			try {
-				setOptionalRequestAttributes(span, request);
-
-				if (this.closed.get()) {
-					endSpanSafely(span);
-					return;
-				}
-
-				storeReplacing(this.mcpRequestSpans, new IdentityKey<>(request), new SpanState(span, request, null, startedAt));
-			} catch (RuntimeException e) {
-				endSpanSafely(span);
-				throw e;
-			}
-		});
-	}
-
-	@Override
-	public void didFinishMcpRequestHandling(@NonNull Request request,
-																					@NonNull Class<? extends McpEndpoint> endpointClass,
-																					@Nullable String sessionId,
-																					@NonNull String jsonRpcMethod,
-																					@Nullable McpJsonRpcRequestId jsonRpcRequestId,
-																					@NonNull McpRequestOutcome requestOutcome,
-																					@Nullable McpJsonRpcError jsonRpcError,
-																					@NonNull Duration duration,
-																					@NonNull List<@NonNull Throwable> throwables) {
-		requireNonNull(request);
-		requireNonNull(endpointClass);
-		requireNonNull(jsonRpcMethod);
-		requireNonNull(requestOutcome);
-		requireNonNull(duration);
-		requireNonNull(throwables);
-
-		if (this.closed.get() || !this.spanPolicy.recordMcpRequestSpans())
-			return;
-
-		safelyRun(() -> {
-			SpanState spanState = this.mcpRequestSpans.remove(new IdentityKey<>(request));
-
-			if (spanState == null)
-				return;
-
-			try {
-				spanState.span().setAttribute(MCP_REQUEST_OUTCOME_ATTRIBUTE_KEY, enumValue(requestOutcome));
-
-				if (jsonRpcError != null) {
-					spanState.span().setAttribute(MCP_JSON_RPC_ERROR_CODE_ATTRIBUTE_KEY, jsonRpcError.code().longValue());
-					spanState.span().setAttribute(ERROR_TYPE_ATTRIBUTE_KEY, "json_rpc_error");
-				}
-
-				for (Throwable throwable : throwables)
-					recordException(spanState.span(), throwable);
-
-				if (jsonRpcError != null || !throwables.isEmpty() || requestOutcome == McpRequestOutcome.JSON_RPC_ERROR)
-					spanState.span().setStatus(StatusCode.ERROR);
-			} finally {
-				endSpanSafely(spanState.span(), spanState.startedAt().plus(duration));
-			}
-		});
-	}
-
-	@Override
-	public void didCreateMcpSession(@NonNull Request request,
-																	@NonNull Class<? extends McpEndpoint> endpointClass,
-																	@NonNull String sessionId) {
-		requireNonNull(request);
-		requireNonNull(endpointClass);
-		requireNonNull(sessionId);
-
-		if (this.closed.get() || !this.spanPolicy.recordMcpSessionEvents())
-			return;
-
-		safelyRun(() -> {
-			SpanState spanState = this.mcpRequestSpans.get(new IdentityKey<>(request));
-
-			if (spanState != null)
-				spanState.span().addEvent("mcp.session.created", Attributes.of(
-						MCP_ENDPOINT_CLASS_ATTRIBUTE_KEY, endpointClass.getName(),
-						MCP_SESSION_ID_PRESENT_ATTRIBUTE_KEY, true));
-		});
-	}
-
-	@Override
-	public void didEstablishMcpSseStream(@NonNull McpSseStream stream) {
-		requireNonNull(stream);
-
-		if (this.closed.get() || !this.spanPolicy.recordMcpSseStreamSpans())
-			return;
-
-		safelyRun(() -> {
-			Span span = this.tracer.spanBuilder(this.spanNamingStrategy.mcpSseStreamSpanName(stream))
-					.setSpanKind(SpanKind.SERVER)
-					.setParent(parentContextFor(stream.getRequest()))
-					.setStartTimestamp(stream.getEstablishedAt())
-					.setAttribute(SERVER_TYPE_ATTRIBUTE_KEY, SERVER_TYPE_MCP)
-					.setAttribute(MCP_ENDPOINT_CLASS_ATTRIBUTE_KEY, stream.getEndpointClass().getName())
-					.setAttribute(MCP_SESSION_ID_PRESENT_ATTRIBUTE_KEY, true)
-					.startSpan();
-
-			try {
-				setOptionalRequestAttributes(span, stream.getRequest());
-
-				if (this.closed.get()) {
-					endSpanSafely(span);
-					return;
-				}
-
-				storeReplacing(this.mcpSseStreamSpans, new IdentityKey<>(stream), new SpanState(span, stream.getRequest(), null, stream.getEstablishedAt()));
-			} catch (RuntimeException e) {
-				endSpanSafely(span);
-				throw e;
-			}
-		});
-	}
-
-	@Override
-	public void didTerminateMcpSseStream(@NonNull McpSseStream stream,
-																			 @NonNull StreamTermination termination) {
-		requireNonNull(stream);
-		requireNonNull(termination);
-
-		if (this.closed.get() || !this.spanPolicy.recordMcpSseStreamSpans())
-			return;
-
-		safelyRun(() -> {
-			SpanState spanState = this.mcpSseStreamSpans.remove(new IdentityKey<>(stream));
-
-			if (spanState == null)
-				return;
-
-			try {
-				applyStreamTermination(spanState.span(), termination);
-			} finally {
-				endSpanSafely(spanState.span(), stream.getEstablishedAt().plus(termination.getDuration()));
-			}
-		});
-	}
-
 	private void applyHttpFinish(@NonNull Span span,
 															 @Nullable ResourceMethod resourceMethod,
 															 @NonNull MarshaledResponse marshaledResponse,
@@ -655,6 +549,36 @@ public final class OpenTelemetryLifecycleObserver implements LifecycleObserver, 
 			span.setAttribute(ERROR_TYPE_ATTRIBUTE_KEY, "http.status_code");
 			span.setStatus(StatusCode.ERROR);
 		}
+	}
+
+	private void applyMcpFinish(@NonNull Span span,
+			@NonNull McpRequestOutcome outcome,
+			@Nullable McpJsonRpcError error) {
+		requireNonNull(span);
+		requireNonNull(outcome);
+
+		String outcomeValue = enumValue(outcome);
+		span.setAttribute(MCP_REQUEST_OUTCOME_ATTRIBUTE_KEY, outcomeValue);
+
+		if (error != null) {
+			String statusCode = String.valueOf(error.getCode());
+			span.setAttribute(RPC_RESPONSE_STATUS_CODE_ATTRIBUTE_KEY, statusCode);
+			span.setAttribute(ERROR_TYPE_ATTRIBUTE_KEY, statusCode);
+			span.setStatus(StatusCode.ERROR);
+		} else if (isMcpErrorOutcome(outcome)) {
+			span.setAttribute(ERROR_TYPE_ATTRIBUTE_KEY, outcomeValue);
+			span.setStatus(StatusCode.ERROR);
+		}
+	}
+
+	private boolean isMcpErrorOutcome(@NonNull McpRequestOutcome outcome) {
+		requireNonNull(outcome);
+
+		return switch (outcome) {
+			case COMPLETE, INPUT_REQUIRED, CANCELED, CLIENT_DISCONNECTED -> false;
+			case REJECTED, APPLICATION_ERROR, PROTOCOL_ERROR, INTERNAL_ERROR,
+					 DEADLINE_EXCEEDED, WRITE_FAILED -> true;
+		};
 	}
 
 	@NonNull
@@ -699,7 +623,7 @@ public final class OpenTelemetryLifecycleObserver implements LifecycleObserver, 
 			return true;
 
 		return switch (termination.getReason()) {
-			case COMPLETED, CLIENT_DISCONNECTED, SERVER_STOPPING, APPLICATION_CANCELED, SESSION_TERMINATED -> false;
+			case COMPLETED, CLIENT_DISCONNECTED, SERVER_STOPPING, APPLICATION_CANCELED -> false;
 			case PROTOCOL_UNSUPPORTED, RESPONSE_TIMEOUT, RESPONSE_IDLE_TIMEOUT, BACKPRESSURE, WRITE_FAILED,
 					 PRODUCER_FAILED, INTERNAL_ERROR, SIMULATOR_LIMIT_EXCEEDED, UNKNOWN -> true;
 		};
@@ -736,7 +660,7 @@ public final class OpenTelemetryLifecycleObserver implements LifecycleObserver, 
 	}
 
 	private void endSpanSafely(@NonNull Span span,
-														 @NonNull Instant timestamp) {
+										 @NonNull Instant timestamp) {
 		requireNonNull(span);
 		requireNonNull(timestamp);
 
@@ -744,6 +668,21 @@ public final class OpenTelemetryLifecycleObserver implements LifecycleObserver, 
 			span.end(timestamp);
 		} catch (RuntimeException e) {
 			// Telemetry failures must never affect application request handling.
+		}
+	}
+
+	private void endSpanSafely(@NonNull Span span,
+			@NonNull Instant startedAt,
+			@NonNull Duration duration) {
+		requireNonNull(span);
+		requireNonNull(startedAt);
+		requireNonNull(duration);
+
+		try {
+			endSpanSafely(span, startedAt.plus(duration));
+		} catch (RuntimeException e) {
+			// Manually supplied durations can exceed Instant's range.
+			endSpanSafely(span);
 		}
 	}
 
@@ -774,17 +713,25 @@ public final class OpenTelemetryLifecycleObserver implements LifecycleObserver, 
 	@NonNull
 	private Context parentContextFor(@NonNull Request request) {
 		requireNonNull(request);
+		return parentContextFor(request.getTraceContext().orElse(null));
+	}
 
-		TraceContext traceContext = request.getTraceContext().orElse(null);
-
+	@NonNull
+	private Context parentContextFor(@Nullable TraceContext traceContext) {
 		if (traceContext == null)
 			return Context.root();
 
 		try {
 			TraceStateBuilder traceStateBuilder = TraceState.builder();
+			List<TraceStateEntry> traceStateEntries =
+					traceContext.getTraceStateEntries();
 
-			for (TraceStateEntry traceStateEntry : traceContext.getTraceStateEntries())
+			// OpenTelemetry prepends each value inserted by put(), so traverse
+			// Soklet's W3C-ordered entries in reverse to preserve their order.
+			for (int index = traceStateEntries.size() - 1; index >= 0; --index) {
+				TraceStateEntry traceStateEntry = traceStateEntries.get(index);
 				traceStateBuilder.put(traceStateEntry.getKey(), traceStateEntry.getValue());
+			}
 
 			SpanContext spanContext = SpanContext.createFromRemoteParent(
 					traceContext.getTraceId(),
@@ -821,6 +768,34 @@ public final class OpenTelemetryLifecycleObserver implements LifecycleObserver, 
 		});
 	}
 
+	private void storeReplacingMcpRequestSpan(
+			@NonNull IdentityKey<McpRequestContext> identityKey,
+			@NonNull McpSpanState spanState) {
+		requireNonNull(identityKey);
+		requireNonNull(spanState);
+
+		this.mcpRequestSpans.compute(identityKey, (key, existingSpanState) -> {
+			if (existingSpanState != null)
+				endSpanSafely(existingSpanState.span());
+
+			boolean closedBeforePublication = this.closed.get();
+
+			if (!closedBeforePublication && this.beforeMcpSpanPublication != null)
+				this.beforeMcpSpanPublication.run();
+
+			if (closedBeforePublication) {
+				endSpanSafely(spanState.span());
+				return null;
+			}
+
+			return spanState;
+		});
+
+		if (this.closed.get()
+				&& this.mcpRequestSpans.remove(identityKey, spanState))
+			endSpanSafely(spanState.span());
+	}
+
 	private void drain(@NonNull ConcurrentMap<?, SpanState> spanStates) {
 		requireNonNull(spanStates);
 
@@ -830,6 +805,20 @@ public final class OpenTelemetryLifecycleObserver implements LifecycleObserver, 
 
 				if (spanStates.remove(entry.getKey(), spanState))
 					endServerStopping(spanState);
+			} catch (RuntimeException e) {
+				// Drain must best-effort every active span even if one entry fails.
+			}
+		}
+	}
+
+	private void drainMcpRequestSpans() {
+		for (Map.Entry<IdentityKey<McpRequestContext>, McpSpanState> entry
+				: this.mcpRequestSpans.entrySet()) {
+			try {
+				McpSpanState spanState = entry.getValue();
+
+				if (this.mcpRequestSpans.remove(entry.getKey(), spanState))
+					endSpanSafely(spanState.span());
 			} catch (RuntimeException e) {
 				// Drain must best-effort every active span even if one entry fails.
 			}
@@ -853,7 +842,6 @@ public final class OpenTelemetryLifecycleObserver implements LifecycleObserver, 
 		return switch (serverType) {
 			case STANDARD_HTTP -> SERVER_TYPE_HTTP;
 			case SSE -> SERVER_TYPE_SSE;
-			case MCP -> SERVER_TYPE_MCP;
 		};
 	}
 
@@ -877,6 +865,8 @@ public final class OpenTelemetryLifecycleObserver implements LifecycleObserver, 
 		private SpanNamingStrategy spanNamingStrategy;
 		@NonNull
 		private SpanPolicy spanPolicy;
+		@Nullable
+		private Runnable beforeMcpSpanPublication;
 
 		private Builder() {
 			this.openTelemetry = GlobalOpenTelemetry.get();
@@ -884,6 +874,7 @@ public final class OpenTelemetryLifecycleObserver implements LifecycleObserver, 
 			this.instrumentationVersion = defaultInstrumentationVersion();
 			this.spanNamingStrategy = SpanNamingStrategy.defaultInstance();
 			this.spanPolicy = SpanPolicy.defaultInstance();
+			this.beforeMcpSpanPublication = null;
 		}
 
 		@NonNull
@@ -926,6 +917,12 @@ public final class OpenTelemetryLifecycleObserver implements LifecycleObserver, 
 		}
 
 		@NonNull
+		Builder beforeMcpSpanPublicationForTesting(@NonNull Runnable hook) {
+			this.beforeMcpSpanPublication = requireNonNull(hook);
+			return this;
+		}
+
+		@NonNull
 		public OpenTelemetryLifecycleObserver build() {
 			return new OpenTelemetryLifecycleObserver(this);
 		}
@@ -958,6 +955,16 @@ public final class OpenTelemetryLifecycleObserver implements LifecycleObserver, 
 		private SpanState {
 			requireNonNull(span);
 			requireNonNull(request);
+			requireNonNull(startedAt);
+		}
+	}
+
+	private record McpSpanState(
+			@NonNull Span span,
+			@NonNull Instant startedAt
+	) {
+		private McpSpanState {
+			requireNonNull(span);
 			requireNonNull(startedAt);
 		}
 	}
