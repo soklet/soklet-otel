@@ -91,7 +91,8 @@ public class OpenTelemetryMcpLifecycleObserverTests {
 	private static final Set<String> CORE_METHODS = Set.of(
 			"server/discover", "tools/list", "tools/call", "prompts/list",
 			"prompts/get", "resources/list", "resources/templates/list",
-			"resources/read", "subscriptions/listen", "notifications/cancelled");
+			"resources/read", "subscriptions/listen", "notifications/cancelled",
+			"tasks/get", "tasks/update", "tasks/cancel");
 	private static final McpEndpoint ENDPOINT = McpEndpoint.withPath(
 			ENDPOINT_PATH, McpImplementation.withNameAndVersion(
 					"otel-mcp-tests", "2.0.0").build())

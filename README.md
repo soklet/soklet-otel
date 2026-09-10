@@ -272,10 +272,10 @@ failures do not create a span, and no separate MCP session, request-stream, or s
 
 The default span name is `MCP <method>`. The built-in name and `rpc.method` use exactly these live bounded
 methods: `server/discover`, `tools/list`, `tools/call`, `prompts/list`, `prompts/get`, `resources/list`,
-`resources/templates/list`, `resources/read`, `subscriptions/listen`, and `notifications/cancelled`. Every
-other value, including an admitted unsupported notification, becomes `<unrecognized>`. The raw method is never
-copied to `rpc.method_original`. A custom `SpanNamingStrategy` receives the full `McpRequestContext`, so the
-application owns the custom name's confidentiality and cardinality.
+`resources/templates/list`, `resources/read`, `subscriptions/listen`, `notifications/cancelled`, `tasks/get`,
+`tasks/update`, and `tasks/cancel`. Every other value, including an admitted unsupported notification, becomes
+`<unrecognized>`. The raw method is never copied to `rpc.method_original`. A custom `SpanNamingStrategy` receives
+the full `McpRequestContext`, so the application owns the custom name's confidentiality and cardinality.
 
 Every MCP span begins with this exact attribute projection:
 
