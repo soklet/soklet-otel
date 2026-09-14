@@ -69,6 +69,9 @@ import static java.util.Objects.requireNonNull;
  * <p>
  * This type complements {@link OpenTelemetryMetricsCollector}: metrics remain low-cardinality aggregate telemetry,
  * while this observer emits per-request and per-stream spans.
+ * The {@code soklet.server.type} attribute uses {@code http}, {@code sse}, or {@code mcp},
+ * matching the metrics vocabulary wherever that attribute is emitted. In 2.0.0, HTTP spans retain
+ * {@code http}; SSE spans use {@code sse} instead of the legacy value {@code server_sent_event}.
  *
  * @author <a href="https://www.revetkn.com">Mark Allen</a>
  */
@@ -78,12 +81,6 @@ public final class OpenTelemetryLifecycleObserver implements LifecycleObserver, 
 	private static final String DEFAULT_INSTRUMENTATION_NAME;
 	@NonNull
 	private static final String URL_SCHEME_HTTP;
-	@NonNull
-	private static final String SERVER_TYPE_HTTP;
-	@NonNull
-	private static final String SERVER_TYPE_SSE;
-	@NonNull
-	private static final String SERVER_TYPE_MCP;
 	@NonNull
 	private static final String RPC_SYSTEM_JSON_RPC;
 	@NonNull
@@ -123,9 +120,6 @@ public final class OpenTelemetryLifecycleObserver implements LifecycleObserver, 
 	static {
 		DEFAULT_INSTRUMENTATION_NAME = "com.soklet.otel";
 		URL_SCHEME_HTTP = "http";
-		SERVER_TYPE_HTTP = "http";
-		SERVER_TYPE_SSE = "server_sent_event";
-		SERVER_TYPE_MCP = "mcp";
 		RPC_SYSTEM_JSON_RPC = "jsonrpc";
 
 		SERVER_TYPE_ATTRIBUTE_KEY = AttributeKey.stringKey("soklet.server.type");
@@ -237,7 +231,7 @@ public final class OpenTelemetryLifecycleObserver implements LifecycleObserver, 
 					.setSpanKind(SpanKind.SERVER)
 					.setParent(parentContextFor(request))
 					.setStartTimestamp(startedAt)
-					.setAttribute(SERVER_TYPE_ATTRIBUTE_KEY, serverTypeValue(serverType))
+					.setAttribute(SERVER_TYPE_ATTRIBUTE_KEY, ServerTypeAttribute.valueFor(serverType))
 					.setAttribute(HTTP_METHOD_ATTRIBUTE_KEY, request.getHttpMethod().name())
 					.setAttribute(URL_SCHEME_ATTRIBUTE_KEY, URL_SCHEME_HTTP)
 					.startSpan();
@@ -307,7 +301,7 @@ public final class OpenTelemetryLifecycleObserver implements LifecycleObserver, 
 					.setSpanKind(SpanKind.SERVER)
 					.setParent(parentContextFor(context.getTraceContext().orElse(null)))
 					.setStartTimestamp(startedAt)
-					.setAttribute(SERVER_TYPE_ATTRIBUTE_KEY, SERVER_TYPE_MCP)
+					.setAttribute(SERVER_TYPE_ATTRIBUTE_KEY, ServerTypeAttribute.MCP)
 					.setAttribute(RPC_SYSTEM_NAME_ATTRIBUTE_KEY, RPC_SYSTEM_JSON_RPC)
 					.setAttribute(RPC_METHOD_ATTRIBUTE_KEY,
 							DefaultSpanNamingStrategy.boundedMcpJsonRpcMethod(
@@ -398,7 +392,7 @@ public final class OpenTelemetryLifecycleObserver implements LifecycleObserver, 
 					.setSpanKind(SpanKind.SERVER)
 					.setParent(parentContextFor(sseConnection.getRequest()))
 					.setStartTimestamp(sseConnection.getEstablishedAt())
-					.setAttribute(SERVER_TYPE_ATTRIBUTE_KEY, SERVER_TYPE_SSE)
+					.setAttribute(SERVER_TYPE_ATTRIBUTE_KEY, ServerTypeAttribute.SSE)
 					.setAttribute(HTTP_METHOD_ATTRIBUTE_KEY, sseConnection.getRequest().getHttpMethod().name())
 					.setAttribute(URL_SCHEME_ATTRIBUTE_KEY, URL_SCHEME_HTTP)
 					.setAttribute(HTTP_ROUTE_ATTRIBUTE_KEY, sseConnection.getResourceMethod().getResourcePathDeclaration().getPath())
@@ -589,7 +583,7 @@ public final class OpenTelemetryLifecycleObserver implements LifecycleObserver, 
 				.setSpanKind(SpanKind.SERVER)
 				.setParent(parentContextFor(stream.getRequest()))
 				.setStartTimestamp(stream.getEstablishedAt())
-				.setAttribute(SERVER_TYPE_ATTRIBUTE_KEY, serverTypeValue(stream.getServerType()))
+				.setAttribute(SERVER_TYPE_ATTRIBUTE_KEY, ServerTypeAttribute.valueFor(stream.getServerType()))
 				.setAttribute(HTTP_METHOD_ATTRIBUTE_KEY, stream.getRequest().getHttpMethod().name())
 				.setAttribute(URL_SCHEME_ATTRIBUTE_KEY, URL_SCHEME_HTTP)
 				.startSpan();
@@ -833,16 +827,6 @@ public final class OpenTelemetryLifecycleObserver implements LifecycleObserver, 
 			spanState.span().setAttribute(STREAM_TERMINATION_REASON_ATTRIBUTE_KEY, enumValue(StreamTerminationReason.SERVER_STOPPING));
 			spanState.span().end();
 		});
-	}
-
-	@NonNull
-	private static String serverTypeValue(@NonNull ServerType serverType) {
-		requireNonNull(serverType);
-
-		return switch (serverType) {
-			case STANDARD_HTTP -> SERVER_TYPE_HTTP;
-			case SSE -> SERVER_TYPE_SSE;
-		};
 	}
 
 	@NonNull

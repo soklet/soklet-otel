@@ -92,9 +92,9 @@ public class OpenTelemetryLifecycleObserverTests {
 				.body("created".getBytes(StandardCharsets.UTF_8))
 				.build();
 
-		observer.didStartRequestHandling(ServerType.STANDARD_HTTP, request, resourceMethod);
+		observer.didStartRequestHandling(ServerType.HTTP, request, resourceMethod);
 		Assertions.assertEquals(Integer.valueOf(1), observer.getActiveSpanCount());
-		observer.didFinishRequestHandling(ServerType.STANDARD_HTTP, request, resourceMethod, response, Duration.ofMillis(8), List.of());
+		observer.didFinishRequestHandling(ServerType.HTTP, request, resourceMethod, response, Duration.ofMillis(8), List.of());
 
 		SpanData span = onlySpan(harness);
 		Assertions.assertEquals("POST /widgets/{id}", span.getName());
@@ -118,8 +118,8 @@ public class OpenTelemetryLifecycleObserverTests {
 		ResourceMethod resourceMethod = createResourceMethod(HttpMethod.GET, "/widgets/{id}", "widget");
 		MarshaledResponse response = MarshaledResponse.fromStatusCode(503);
 
-		observer.didStartRequestHandling(ServerType.STANDARD_HTTP, request, resourceMethod);
-		observer.didFinishRequestHandling(ServerType.STANDARD_HTTP, request, resourceMethod, response, Duration.ofMillis(3), List.of());
+		observer.didStartRequestHandling(ServerType.HTTP, request, resourceMethod);
+		observer.didFinishRequestHandling(ServerType.HTTP, request, resourceMethod, response, Duration.ofMillis(3), List.of());
 
 		SpanData span = onlySpan(harness);
 		Assertions.assertEquals(StatusCode.ERROR, span.getStatus().getStatusCode());
@@ -135,8 +135,8 @@ public class OpenTelemetryLifecycleObserverTests {
 		Request request = Request.fromPath(HttpMethod.GET, "/widgets/missing");
 		ResourceMethod resourceMethod = createResourceMethod(HttpMethod.GET, "/widgets/{id}", "widget");
 
-		observer.didStartRequestHandling(ServerType.STANDARD_HTTP, request, resourceMethod);
-		observer.didFinishRequestHandling(ServerType.STANDARD_HTTP, request, resourceMethod,
+		observer.didStartRequestHandling(ServerType.HTTP, request, resourceMethod);
+		observer.didFinishRequestHandling(ServerType.HTTP, request, resourceMethod,
 				MarshaledResponse.fromStatusCode(404), Duration.ofMillis(3), List.of());
 
 		SpanData span = onlySpan(harness);
@@ -153,8 +153,8 @@ public class OpenTelemetryLifecycleObserverTests {
 		Request request = Request.fromPath(HttpMethod.GET, "/widgets/123");
 		ResourceMethod resourceMethod = createResourceMethod(HttpMethod.GET, "/widgets/{id}", "widget");
 
-		observer.didStartRequestHandling(ServerType.STANDARD_HTTP, request, resourceMethod);
-		observer.didFinishRequestHandling(ServerType.STANDARD_HTTP, request, resourceMethod,
+		observer.didStartRequestHandling(ServerType.HTTP, request, resourceMethod);
+		observer.didFinishRequestHandling(ServerType.HTTP, request, resourceMethod,
 				MarshaledResponse.fromStatusCode(200), Duration.ofMillis(3), List.of());
 
 		SpanData span = onlySpan(harness);
@@ -175,8 +175,8 @@ public class OpenTelemetryLifecycleObserverTests {
 				.build();
 		ResourceMethod resourceMethod = createResourceMethod(HttpMethod.GET, "/widgets/{id}", "widget");
 
-		observer.didStartRequestHandling(ServerType.STANDARD_HTTP, request, resourceMethod);
-		observer.didFinishRequestHandling(ServerType.STANDARD_HTTP, request, resourceMethod,
+		observer.didStartRequestHandling(ServerType.HTTP, request, resourceMethod);
+		observer.didFinishRequestHandling(ServerType.HTTP, request, resourceMethod,
 				MarshaledResponse.fromStatusCode(200), Duration.ofMillis(3), List.of());
 
 		SpanData span = onlySpan(harness);
@@ -198,8 +198,8 @@ public class OpenTelemetryLifecycleObserverTests {
 				.withOpenTelemetry(defaultHarness.openTelemetrySdk())
 				.build();
 
-		defaultObserver.didStartRequestHandling(ServerType.STANDARD_HTTP, request, resourceMethod);
-		defaultObserver.didFinishRequestHandling(ServerType.STANDARD_HTTP, request, resourceMethod,
+		defaultObserver.didStartRequestHandling(ServerType.HTTP, request, resourceMethod);
+		defaultObserver.didFinishRequestHandling(ServerType.HTTP, request, resourceMethod,
 				MarshaledResponse.fromStatusCode(200), Duration.ofMillis(3), List.of());
 
 		SpanData defaultSpan = onlySpan(defaultHarness);
@@ -215,8 +215,8 @@ public class OpenTelemetryLifecycleObserverTests {
 						.build())
 				.build();
 
-		optInObserver.didStartRequestHandling(ServerType.STANDARD_HTTP, request, resourceMethod);
-		optInObserver.didFinishRequestHandling(ServerType.STANDARD_HTTP, request, resourceMethod,
+		optInObserver.didStartRequestHandling(ServerType.HTTP, request, resourceMethod);
+		optInObserver.didFinishRequestHandling(ServerType.HTTP, request, resourceMethod,
 				MarshaledResponse.fromStatusCode(200), Duration.ofMillis(3), List.of());
 
 		SpanData optInSpan = onlySpan(optInHarness);
@@ -238,10 +238,10 @@ public class OpenTelemetryLifecycleObserverTests {
 				.stream(StreamingResponseBody.fromWriter((output, context) -> output.write(new byte[]{1, 2, 3})))
 				.finish();
 
-		observer.didStartRequestHandling(ServerType.STANDARD_HTTP, request, resourceMethod);
+		observer.didStartRequestHandling(ServerType.HTTP, request, resourceMethod);
 		Instant establishedAt = Instant.now();
 		TestStreamingResponseHandle stream = new TestStreamingResponseHandle(request, resourceMethod, response, establishedAt);
-		observer.didFinishRequestHandling(ServerType.STANDARD_HTTP, request, resourceMethod, response, Duration.ofMillis(1), List.of());
+		observer.didFinishRequestHandling(ServerType.HTTP, request, resourceMethod, response, Duration.ofMillis(1), List.of());
 
 		Assertions.assertEquals(List.of(), harness.spanExporter().getFinishedSpanItems());
 		Assertions.assertEquals(Integer.valueOf(1), observer.getActiveSpanCount());
@@ -249,8 +249,33 @@ public class OpenTelemetryLifecycleObserverTests {
 		observer.didTerminateResponseStream(stream, StreamTermination.with(StreamTerminationReason.COMPLETED, Duration.ZERO).build());
 
 		SpanData span = onlySpan(harness);
+		Assertions.assertEquals("http", span.getAttributes().get(SERVER_TYPE_ATTRIBUTE_KEY));
 		Assertions.assertEquals("completed", span.getAttributes().get(STREAM_TERMINATION_REASON_ATTRIBUTE_KEY));
 		Assertions.assertEquals(StatusCode.UNSET, span.getStatus().getStatusCode());
+		Assertions.assertEquals(Integer.valueOf(0), observer.getActiveSpanCount());
+	}
+
+	@Test
+	public void backfilledStreamingHttpSpanUsesHttpServerType() throws Exception {
+		TestHarness harness = TestHarness.create();
+		OpenTelemetryLifecycleObserver observer = OpenTelemetryLifecycleObserver
+				.withOpenTelemetry(harness.openTelemetrySdk())
+				.build();
+		Request request = tracedRequest(HttpMethod.GET, "/download");
+		ResourceMethod resourceMethod = createResourceMethod(HttpMethod.GET, "/download", "download");
+		MarshaledResponse response = MarshaledResponse.fromStatusCode(200)
+				.copy()
+				.stream(StreamingResponseBody.fromWriter((output, context) -> output.write(new byte[]{1, 2, 3})))
+				.finish();
+		TestStreamingResponseHandle stream = new TestStreamingResponseHandle(request, resourceMethod, response, Instant.now());
+
+		observer.didTerminateResponseStream(stream,
+				StreamTermination.with(StreamTerminationReason.COMPLETED, Duration.ZERO).build());
+
+		SpanData span = onlySpan(harness);
+		Assertions.assertEquals("http", span.getAttributes().get(SERVER_TYPE_ATTRIBUTE_KEY));
+		Assertions.assertEquals("http", span.getAttributes().get(AttributeKey.stringKey("url.scheme")));
+		Assertions.assertEquals("completed", span.getAttributes().get(STREAM_TERMINATION_REASON_ATTRIBUTE_KEY));
 		Assertions.assertEquals(Integer.valueOf(0), observer.getActiveSpanCount());
 	}
 
@@ -284,15 +309,15 @@ public class OpenTelemetryLifecycleObserverTests {
 		Request request = Request.fromPath(HttpMethod.GET, "/widgets/123");
 		ResourceMethod resourceMethod = createResourceMethod(HttpMethod.GET, "/widgets/{id}", "widget");
 
-		observer.didStartRequestHandling(ServerType.STANDARD_HTTP, request, resourceMethod);
-		observer.didStartRequestHandling(ServerType.STANDARD_HTTP, request, resourceMethod);
+		observer.didStartRequestHandling(ServerType.HTTP, request, resourceMethod);
+		observer.didStartRequestHandling(ServerType.HTTP, request, resourceMethod);
 
 		Assertions.assertEquals(Integer.valueOf(1), observer.getActiveSpanCount());
 		Assertions.assertEquals(1, harness.spanExporter().getFinishedSpanItems().size());
 		Assertions.assertEquals("server_stopping", harness.spanExporter().getFinishedSpanItems().get(0)
 				.getAttributes().get(STREAM_TERMINATION_REASON_ATTRIBUTE_KEY));
 
-		observer.didFinishRequestHandling(ServerType.STANDARD_HTTP, request, resourceMethod,
+		observer.didFinishRequestHandling(ServerType.HTTP, request, resourceMethod,
 				MarshaledResponse.fromStatusCode(200), Duration.ofMillis(3), List.of());
 
 		Assertions.assertEquals(Integer.valueOf(0), observer.getActiveSpanCount());
@@ -316,7 +341,7 @@ public class OpenTelemetryLifecycleObserverTests {
 		SpanData span = onlySpan(harness);
 		Assertions.assertEquals("GET /events sse", span.getName());
 		Assertions.assertEquals(SpanKind.SERVER, span.getKind());
-		Assertions.assertEquals("server_sent_event", span.getAttributes().get(SERVER_TYPE_ATTRIBUTE_KEY));
+		Assertions.assertEquals("sse", span.getAttributes().get(SERVER_TYPE_ATTRIBUTE_KEY));
 		Assertions.assertEquals("client_disconnected", span.getAttributes().get(STREAM_TERMINATION_REASON_ATTRIBUTE_KEY));
 		Assertions.assertEquals(StatusCode.UNSET, span.getStatus().getStatusCode());
 		Assertions.assertEquals(Integer.valueOf(0), observer.getActiveSpanCount());
@@ -412,8 +437,8 @@ public class OpenTelemetryLifecycleObserverTests {
 					Request request = tracedRequest(HttpMethod.GET, "/widgets/" + requestIndex,
 							"00-0af7651916cd43dd8448eb211c8031" + Character.forDigit(requestIndex, 16) + "-b7ad6b7169203331-01");
 
-					observer.didStartRequestHandling(ServerType.STANDARD_HTTP, request, resourceMethod);
-					observer.didFinishRequestHandling(ServerType.STANDARD_HTTP, request, resourceMethod,
+					observer.didStartRequestHandling(ServerType.HTTP, request, resourceMethod);
+					observer.didFinishRequestHandling(ServerType.HTTP, request, resourceMethod,
 							MarshaledResponse.fromStatusCode(200), Duration.ofMillis(1), List.of());
 				} catch (InterruptedException e) {
 					Thread.currentThread().interrupt();
@@ -452,7 +477,7 @@ public class OpenTelemetryLifecycleObserverTests {
 		Request request = Request.fromPath(HttpMethod.GET, "/widgets/123");
 		ResourceMethod resourceMethod = createResourceMethod(HttpMethod.GET, "/widgets/{id}", "widget");
 
-		Assertions.assertDoesNotThrow(() -> observer.didStartRequestHandling(ServerType.STANDARD_HTTP, request, resourceMethod));
+		Assertions.assertDoesNotThrow(() -> observer.didStartRequestHandling(ServerType.HTTP, request, resourceMethod));
 		Assertions.assertEquals(Integer.valueOf(0), observer.getActiveSpanCount());
 	}
 
@@ -465,7 +490,7 @@ public class OpenTelemetryLifecycleObserverTests {
 		Request request = Request.fromPath(HttpMethod.GET, "/widgets/123");
 		ResourceMethod resourceMethod = createResourceMethod(HttpMethod.GET, "/widgets/{id}", "widget");
 
-		observer.didStartRequestHandling(ServerType.STANDARD_HTTP, request, resourceMethod);
+		observer.didStartRequestHandling(ServerType.HTTP, request, resourceMethod);
 		Assertions.assertEquals(Integer.valueOf(1), observer.getActiveSpanCount());
 
 		observer.close();
@@ -557,7 +582,7 @@ public class OpenTelemetryLifecycleObserverTests {
 		@Override
 		@NonNull
 		public ServerType getServerType() {
-			return ServerType.STANDARD_HTTP;
+			return ServerType.HTTP;
 		}
 
 		@Override

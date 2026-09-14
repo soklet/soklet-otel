@@ -106,12 +106,18 @@ OpenTelemetryMetricsCollector collector =
 
 ## Emitted Metrics
 
-HTTP metrics (default strategy: `SEMCONV`):
+HTTP metric names depend on the selected strategy (default: `SEMCONV`):
 
-- `http.server.active_requests`
-- `http.server.request.duration`
-- `http.server.request.body.size` (encoded payload bytes as transferred, excluding headers and transfer framing)
-- `http.server.response.body.size`
+| `SEMCONV` name | `SOKLET` name | Kind and unit |
+| --- | --- | --- |
+| `http.server.active_requests` | `soklet.server.requests.active` | Up-down counter, `{request}` |
+| `http.server.request.duration` | `soklet.server.request.duration` | Histogram, `s` |
+| `http.server.request.body.size` | `soklet.server.request.body.size` | Histogram, `By` |
+| `http.server.response.body.size` | `soklet.server.response.body.size` | Histogram, `By` |
+
+Request-body size is encoded payload bytes as transferred with `SEMCONV` (excluding headers
+and transfer framing), or handler-visible bytes with `SOKLET`. Response-body size uses the
+finalized marshaled representation under both strategies, before any later transport gzip.
 
 Soklet-specific metrics (all strategies):
 
@@ -120,6 +126,7 @@ Soklet-specific metrics (all strategies):
 - `soklet.server.requests.accepted`
 - `soklet.server.requests.rejected`
 - `soklet.server.request.read.failures`
+- `soklet.server.request.throwables` (Counter, `{throwable}`; counts observed throwables, not failed requests)
 - `soklet.server.transport.failures` (`soklet.server.type`, `soklet.failure.reason`, optional `error.type`)
 - `soklet.server.response.write.duration`
 - `soklet.server.response.write.failures`
@@ -146,7 +153,14 @@ Soklet-specific metrics (all strategies):
 - `soklet.sse.broadcast.enqueued`
 - `soklet.sse.broadcast.dropped`
 
-MCP metrics in 2.0.0 map all 23 `McpMetricsEvent` variants to exactly
+The throwable counter uses the same attributes as request duration: `http.request.method`,
+`http.response.status_code`, and `error.type` containing the first observed throwable's class
+name. With `SEMCONV`, it also has `url.scheme=http` and `http.route` only for matched routes;
+with `SOKLET`, it has `soklet.server.type` and `http.route` (including `_unmatched`).
+An invocation with two observed throwables increments the counter by two. Throwable messages,
+stack traces, and attributes from later throwables are not exported by this counter.
+
+MCP metrics in 2.0.0 map all 23 [`McpMetricsEvent`](https://javadoc.soklet.com/com/soklet/McpMetricsEvent.html) variants to exactly
 21 dedicated `soklet.mcp.*` instruments plus the existing shared transport-failure instrument:
 
 | Instrument | Kind and unit | Exact attributes |
@@ -194,7 +208,7 @@ The fixed enum-backed vocabularies are:
 - Request outcome: `complete`, `input_required`, `rejected`, `application_error`, `protocol_error`,
   `internal_error`, `canceled`, `deadline_exceeded`, `client_disconnected`, `write_failed`.
 - Request-stream and subscription termination reason: `completed`, `client_disconnected`, `request_canceled`,
-  `deadline_exceeded`, `write_failed`, `backpressure`, `server_stopped`,
+  `deadline_exceeded`, `write_failed`, `backpressure`, `server_stopping`,
   `simulator_capture_item_limit_exceeded`, `simulator_capture_byte_limit_exceeded`, `internal_error`.
 - MCP transport-failure reason: `request_read_timeout`, `request_too_large`, `malformed_request`, `read_error`,
   `write_error`, `response_write_idle_timeout`, `response_ready_error`, `request_read_timeout_error`,
@@ -204,7 +218,7 @@ The fixed enum-backed vocabularies are:
 
 Common attributes:
 
-- `soklet.server.type` (`standard_http`, `sse`, `mcp`)
+- `soklet.server.type` (`http`, `sse`, `mcp`)
 - `soklet.failure.reason`
 - `error.type`
 - `http.request.method`
@@ -275,7 +289,7 @@ methods: `server/discover`, `tools/list`, `tools/call`, `prompts/list`, `prompts
 `resources/templates/list`, `resources/read`, `subscriptions/listen`, `notifications/cancelled`, `tasks/get`,
 `tasks/update`, and `tasks/cancel`. Every other value, including an admitted unsupported notification, becomes
 `<unrecognized>`. The raw method is never copied to `rpc.method_original`. A custom `SpanNamingStrategy` receives
-the full `McpRequestContext`, so the application owns the custom name's confidentiality and cardinality.
+the full [`McpRequestContext`](https://javadoc.soklet.com/com/soklet/McpRequestContext.html), so the application owns the custom name's confidentiality and cardinality.
 
 Every MCP span begins with this exact attribute projection:
 
@@ -302,6 +316,25 @@ produce custom JSON-RPC error codes own the cardinality and confidentiality of t
 `rpc.response.status_code` and `error.type` values.
 
 Trace IDs belong in spans and logs, not metric labels. If you need metrics-to-trace drill-down, use OpenTelemetry exemplars in your metrics pipeline rather than adding trace IDs as attributes.
+
+## Server-Type Attribute Migration in 2.0.0
+
+Metrics and spans use the same `soklet.server.type` vocabulary: `http` for HTTP
+(including streaming responses), `sse` for SSE, and `mcp` for MCP. Update HTTP metric
+filters, dashboards, and alerts from `standard_http` to `http`, and SSE span filters
+from `server_sent_event` to `sse`. HTTP spans retain `http`; SSE metrics retain `sse`,
+and MCP retains `mcp` across both signals.
+
+Soklet 4.0.0 also renames the Java enum constant `ServerType.STANDARD_HTTP` to
+`ServerType.HTTP` without an alias. Update Java references and recompile;
+the explicit OpenTelemetry value for HTTP remains lowercase `http`.
+
+The HTTP metric-label change affects the Soklet connection, request-acceptance,
+request-read-failure, and transport-failure counters under both naming strategies,
+including `SEMCONV`. Request-handling and response-write metrics (including
+`soklet.server.request.throwables`) carry `soklet.server.type` only under `SOKLET`.
+Standard HTTP instrument names, semantic-convention attributes, and `url.scheme=http`
+are unchanged; this migration adds no attributes to metrics that omit them.
 
 ## MCP Migration in 2.0.0
 
@@ -345,7 +378,7 @@ The modern span contract is frozen by these eight focused methods in
 - `mcpSpanProjectionExcludesSensitiveContextAndHttpFallbackCanaries`
 
 `OpenTelemetryLifecycleObserverTests#legacyMcpSessionTracingSurfacesRemainAbsentAndModernRequestCallbacksAreImplemented`
-freezes the public removal/addition boundary. The release verification contract runs the full 36-test module on
+freezes the public removal/addition boundary. The release verification contract runs the full test suite on
 JDK 17, 21, and 25 and builds the package, sources, attached Javadocs, and standalone Javadocs against exact
 Soklet 4.0.0.
 
@@ -358,8 +391,8 @@ Soklet 4.0.0.
   `SEMCONV` and `SOKLET`; the naming strategy changes HTTP names only.
 - With `SEMCONV`, `http.server.request.body.size` records the encoded payload size required by the OpenTelemetry HTTP semantic conventions, so a transparently decompressed gzip request reports its compressed size. With `SOKLET`, `soklet.server.request.body.size` records the handler-visible body size instead.
 - If Soklet rejects an oversized request before its complete encoded payload size is known, the `SEMCONV` body-size sample is omitted instead of recording an inaccurate zero.
-- `http.server.response.body.size` records the finalized `MarshaledResponse` size. If Soklet's HTTP transport applies dynamic gzip afterward, this remains the pre-compression size; already-encoded response bodies report their encoded size normally.
-- `snapshot()` / `snapshotText()` from
+- `http.server.response.body.size` records the finalized [`MarshaledResponse`](https://javadoc.soklet.com/com/soklet/MarshaledResponse.html) size. If Soklet's HTTP transport applies dynamic gzip afterward, this remains the pre-compression size; already-encoded response bodies report their encoded size normally.
+- [`snapshot()`](<https://javadoc.soklet.com/com/soklet/MetricsCollector.html#snapshot()>) / [`snapshotText()`](<https://javadoc.soklet.com/com/soklet/MetricsCollector.html#snapshotText()>) from
   [`MetricsCollector`](https://javadoc.soklet.com/com/soklet/MetricsCollector.html)
   are not implemented here; use your OpenTelemetry backend/exporter to query metrics.
 - The integration emits observations directly into the configured OpenTelemetry SDK. It does not promise core

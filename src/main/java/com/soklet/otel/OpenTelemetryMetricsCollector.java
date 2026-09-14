@@ -67,6 +67,15 @@ import static java.util.Objects.requireNonNull;
  * semantic-convention body-size sample is omitted instead of recording an inaccurate zero.
  * Response-body size is based on the finalized {@link MarshaledResponse}; if the HTTP transport applies
  * dynamic gzip afterward, that metric remains the pre-compression size.
+ * The {@code soklet.server.type} attribute uses the same explicit {@code http}, {@code sse}, and
+ * {@code mcp} vocabulary as spans. In 2.0.0, HTTP metric values change from {@code standard_http}
+ * to {@code http}, including connection, acceptance, read-failure, and transport-failure metrics
+ * under either naming strategy. Request metrics that omit this attribute under {@code SEMCONV}
+ * continue to omit it; instrument names and {@code url.scheme} are unchanged by this value mapping.
+ * The {@code soklet.server.request.throwables} counter uses unit {@code {throwable}} and increments
+ * by the number of observed throwables, not the number of failed requests. It has the same
+ * strategy-dependent attributes as request duration, including the first throwable's class as
+ * {@code error.type}; throwable messages and stack traces are not metric attributes.
  * <p>
  * If inbound requests include W3C trace context, Soklet exposes it via {@link Request#getTraceContext()} to
  * custom metrics collectors and application code. This metrics-only implementation intentionally does not emit
@@ -740,7 +749,7 @@ public final class OpenTelemetryMetricsCollector implements MetricsCollector {
 			this.mcpHandlerCapacityRejectionsCounter.add(1);
 		} else if (event instanceof McpMetricsEvent.TransportFailure transportFailure) {
 			this.transportFailureCounter.add(1, Attributes.of(
-					SERVER_TYPE_ATTRIBUTE_KEY, "mcp",
+					SERVER_TYPE_ATTRIBUTE_KEY, ServerTypeAttribute.MCP,
 					FAILURE_REASON_ATTRIBUTE_KEY,
 					enumValue(transportFailure.getReason())));
 		}
@@ -1043,7 +1052,7 @@ public final class OpenTelemetryMetricsCollector implements MetricsCollector {
 	@NonNull
 	private Attributes serverTypeAttributes(@NonNull ServerType serverType) {
 		requireNonNull(serverType);
-		return Attributes.of(SERVER_TYPE_ATTRIBUTE_KEY, enumValue(serverType));
+		return Attributes.of(SERVER_TYPE_ATTRIBUTE_KEY, ServerTypeAttribute.valueFor(serverType));
 	}
 
 	@NonNull
@@ -1052,7 +1061,7 @@ public final class OpenTelemetryMetricsCollector implements MetricsCollector {
 		requireNonNull(serverType);
 		requireNonNull(reason);
 		return Attributes.builder()
-				.put(SERVER_TYPE_ATTRIBUTE_KEY, enumValue(serverType))
+				.put(SERVER_TYPE_ATTRIBUTE_KEY, ServerTypeAttribute.valueFor(serverType))
 				.put(FAILURE_REASON_ATTRIBUTE_KEY, enumValue(reason))
 				.build();
 	}
@@ -1065,7 +1074,7 @@ public final class OpenTelemetryMetricsCollector implements MetricsCollector {
 		requireNonNull(reason);
 
 		var builder = Attributes.builder()
-				.put(SERVER_TYPE_ATTRIBUTE_KEY, enumValue(serverType))
+				.put(SERVER_TYPE_ATTRIBUTE_KEY, ServerTypeAttribute.valueFor(serverType))
 				.put(FAILURE_REASON_ATTRIBUTE_KEY, enumValue(reason));
 
 		if (throwable != null)
@@ -1086,7 +1095,7 @@ public final class OpenTelemetryMetricsCollector implements MetricsCollector {
 		if (this.metricNamingStrategy == MetricNamingStrategy.SEMCONV) {
 			builder.put(URL_SCHEME_ATTRIBUTE_KEY, URL_SCHEME_HTTP);
 		} else {
-			builder.put(SERVER_TYPE_ATTRIBUTE_KEY, enumValue(serverType));
+			builder.put(SERVER_TYPE_ATTRIBUTE_KEY, ServerTypeAttribute.valueFor(serverType));
 		}
 
 		return builder.build();
@@ -1110,7 +1119,7 @@ public final class OpenTelemetryMetricsCollector implements MetricsCollector {
 			if (resourceMethod != null)
 				builder.put(HTTP_ROUTE_ATTRIBUTE_KEY, routeFor(resourceMethod));
 		} else {
-			builder.put(SERVER_TYPE_ATTRIBUTE_KEY, enumValue(serverType))
+			builder.put(SERVER_TYPE_ATTRIBUTE_KEY, ServerTypeAttribute.valueFor(serverType))
 					.put(HTTP_ROUTE_ATTRIBUTE_KEY, routeFor(resourceMethod));
 		}
 

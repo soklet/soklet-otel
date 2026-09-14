@@ -16,6 +16,7 @@
 
 package com.soklet.otel;
 
+import com.soklet.ConnectionRejectionReason;
 import com.soklet.HttpMethod;
 import com.soklet.MarshaledResponse;
 import com.soklet.McpMetricsEvent;
@@ -25,6 +26,7 @@ import com.soklet.MetricsCollector;
 import com.soklet.ShutdownComponentDisposition;
 import com.soklet.Request;
 import com.soklet.RequestReadFailureReason;
+import com.soklet.RequestRejectionReason;
 import com.soklet.ResourceMethod;
 import com.soklet.ResourcePathDeclaration;
 import com.soklet.ServerType;
@@ -122,9 +124,9 @@ public class OpenTelemetryMetricsCollectorTests {
 				.body("created".getBytes(StandardCharsets.UTF_8))
 				.build();
 
-		collector.didStartRequestHandling(ServerType.STANDARD_HTTP, request, resourceMethod);
-		collector.didFinishRequestHandling(ServerType.STANDARD_HTTP, request, resourceMethod, response, Duration.ofMillis(25), List.of());
-		collector.didWriteResponse(ServerType.STANDARD_HTTP, request, resourceMethod, response, Duration.ofMillis(4));
+		collector.didStartRequestHandling(ServerType.HTTP, request, resourceMethod);
+		collector.didFinishRequestHandling(ServerType.HTTP, request, resourceMethod, response, Duration.ofMillis(25), List.of());
+		collector.didWriteResponse(ServerType.HTTP, request, resourceMethod, response, Duration.ofMillis(4));
 
 		Collection<MetricData> metrics = harness.metricReader().collectAllMetrics();
 
@@ -172,11 +174,11 @@ public class OpenTelemetryMetricsCollectorTests {
 				.finish();
 		MarshaledResponse response = MarshaledResponse.fromStatusCode(204);
 
-		semconvCollector.didStartRequestHandling(ServerType.STANDARD_HTTP, handlerVisibleRequest, resourceMethod);
-		semconvCollector.didFinishRequestHandling(ServerType.STANDARD_HTTP, handlerVisibleRequest, resourceMethod,
+		semconvCollector.didStartRequestHandling(ServerType.HTTP, handlerVisibleRequest, resourceMethod);
+		semconvCollector.didFinishRequestHandling(ServerType.HTTP, handlerVisibleRequest, resourceMethod,
 				response, Duration.ofMillis(1), List.of());
-		sokletCollector.didStartRequestHandling(ServerType.STANDARD_HTTP, handlerVisibleRequest, resourceMethod);
-		sokletCollector.didFinishRequestHandling(ServerType.STANDARD_HTTP, handlerVisibleRequest, resourceMethod,
+		sokletCollector.didStartRequestHandling(ServerType.HTTP, handlerVisibleRequest, resourceMethod);
+		sokletCollector.didFinishRequestHandling(ServerType.HTTP, handlerVisibleRequest, resourceMethod,
 				response, Duration.ofMillis(1), List.of());
 
 		Collection<MetricData> metrics = harness.metricReader().collectAllMetrics();
@@ -199,8 +201,8 @@ public class OpenTelemetryMetricsCollectorTests {
 				.build();
 		MarshaledResponse response = MarshaledResponse.fromStatusCode(413);
 
-		collector.didStartRequestHandling(ServerType.STANDARD_HTTP, request, resourceMethod);
-		collector.didFinishRequestHandling(ServerType.STANDARD_HTTP, request, resourceMethod,
+		collector.didStartRequestHandling(ServerType.HTTP, request, resourceMethod);
+		collector.didFinishRequestHandling(ServerType.HTTP, request, resourceMethod,
 				response, Duration.ofMillis(1), List.of());
 
 		Collection<MetricData> metrics = harness.metricReader().collectAllMetrics();
@@ -216,7 +218,7 @@ public class OpenTelemetryMetricsCollectorTests {
 				.build();
 
 		collector.didFailToReadRequest(
-				ServerType.STANDARD_HTTP,
+				ServerType.HTTP,
 				null,
 				"/widgets",
 				RequestReadFailureReason.REQUEST_BODY_DECOMPRESSION_FAILED,
@@ -225,7 +227,7 @@ public class OpenTelemetryMetricsCollectorTests {
 		Collection<MetricData> metrics = harness.metricReader().collectAllMetrics();
 
 		Assertions.assertEquals(1L, longSumValue(metrics, "soklet.server.request.read.failures",
-				attributes -> "standard_http".equals(attributes.get(SERVER_TYPE_ATTRIBUTE_KEY))
+				attributes -> "http".equals(attributes.get(SERVER_TYPE_ATTRIBUTE_KEY))
 						&& "request_body_decompression_failed".equals(attributes.get(FAILURE_REASON_ATTRIBUTE_KEY))));
 	}
 
@@ -237,11 +239,11 @@ public class OpenTelemetryMetricsCollectorTests {
 				.build();
 
 		collector.didRecordTransportFailure(
-				ServerType.STANDARD_HTTP,
+				ServerType.HTTP,
 				MetricsCollector.TransportFailureReason.RESPONSE_WRITE_IDLE_TIMEOUT,
 				new IOException("stalled"));
 		collector.didRecordTransportFailure(
-				ServerType.STANDARD_HTTP,
+				ServerType.HTTP,
 				MetricsCollector.TransportFailureReason.TASK_ERROR,
 				null);
 		collector.didRecordTransportFailure(
@@ -254,14 +256,14 @@ public class OpenTelemetryMetricsCollectorTests {
 		Assertions.assertEquals(
 				1L,
 				longSumValue(metrics, "soklet.server.transport.failures",
-						attributes -> "standard_http".equals(attributes.get(SERVER_TYPE_ATTRIBUTE_KEY))
+						attributes -> "http".equals(attributes.get(SERVER_TYPE_ATTRIBUTE_KEY))
 								&& "response_write_idle_timeout".equals(attributes.get(FAILURE_REASON_ATTRIBUTE_KEY))
 								&& IOException.class.getName().equals(attributes.get(ERROR_TYPE_ATTRIBUTE_KEY)))
 		);
 		Assertions.assertEquals(
 				1L,
 				longSumValue(metrics, "soklet.server.transport.failures",
-						attributes -> "standard_http".equals(attributes.get(SERVER_TYPE_ATTRIBUTE_KEY))
+						attributes -> "http".equals(attributes.get(SERVER_TYPE_ATTRIBUTE_KEY))
 								&& "task_error".equals(attributes.get(FAILURE_REASON_ATTRIBUTE_KEY))
 								&& attributes.get(ERROR_TYPE_ATTRIBUTE_KEY) == null)
 		);
@@ -272,6 +274,80 @@ public class OpenTelemetryMetricsCollectorTests {
 								&& "write_timeout".equals(attributes.get(FAILURE_REASON_ATTRIBUTE_KEY))
 								&& attributes.get(ERROR_TYPE_ATTRIBUTE_KEY) == null)
 		);
+	}
+
+	@Test
+	public void semconvMetricsUseServerTypeVocabularyOnlyWhereAlreadyEmitted() throws Exception {
+		assertServerTypeVocabulary(OpenTelemetryMetricsCollector.MetricNamingStrategy.SEMCONV);
+	}
+
+	@Test
+	public void sokletMetricsUseServerTypeVocabulary() throws Exception {
+		assertServerTypeVocabulary(OpenTelemetryMetricsCollector.MetricNamingStrategy.SOKLET);
+	}
+
+	private static void assertServerTypeVocabulary(
+			OpenTelemetryMetricsCollector.MetricNamingStrategy strategy) throws Exception {
+		TestHarness harness = TestHarness.create();
+		OpenTelemetryMetricsCollector collector = OpenTelemetryMetricsCollector
+				.withMeter(harness.openTelemetrySdk().getMeter("test-server-types-" + strategy))
+				.metricNamingStrategy(strategy).build();
+		ResourceMethod resourceMethod = createResourceMethod(HttpMethod.POST, "/widgets/{id}", "widget");
+		Request request = Request.withPath(HttpMethod.POST, "/widgets/123")
+				.body(new byte[]{1, 2}).build();
+		MarshaledResponse response = MarshaledResponse.withStatusCode(500)
+				.body(new byte[]{3, 4}).build();
+
+		for (ServerType serverType : ServerType.values()) {
+			collector.didAcceptConnection(serverType, null);
+			collector.didFailToAcceptConnection(serverType, null,
+					ConnectionRejectionReason.MAX_CONNECTIONS, null);
+			collector.didAcceptRequest(serverType, null, "/widgets/123");
+			collector.didFailToAcceptRequest(serverType, null, "/widgets/123",
+					RequestRejectionReason.REQUEST_HANDLER_QUEUE_FULL, null);
+			collector.didFailToReadRequest(serverType, null, "/widgets/123",
+					RequestReadFailureReason.REQUEST_BODY_DECOMPRESSION_FAILED, null);
+			collector.didRecordTransportFailure(serverType,
+					MetricsCollector.TransportFailureReason.WRITE_TIMEOUT, null);
+			collector.didStartRequestHandling(serverType, request, resourceMethod);
+			collector.didFinishRequestHandling(serverType, request, resourceMethod, response,
+					Duration.ofMillis(2), List.of(new IOException("request failed")));
+			collector.didWriteResponse(serverType, request, resourceMethod, response, Duration.ofMillis(1));
+			collector.didFailToWriteResponse(serverType, request, resourceMethod, response,
+					Duration.ofMillis(1), new IOException("write failed"));
+		}
+		collector.didRecordMcpMetricsEvent(McpMetricsEvent.transportFailure(
+				MetricsCollector.TransportFailureReason.WRITE_TIMEOUT));
+
+		boolean semconv = strategy == OpenTelemetryMetricsCollector.MetricNamingStrategy.SEMCONV;
+		String requestMetricPrefix = semconv ? "http.server." : "soklet.server.";
+		Set<String> requestMetricNames = Set.of(
+				semconv ? "http.server.active_requests" : "soklet.server.requests.active",
+				requestMetricPrefix + "request.duration", requestMetricPrefix + "request.body.size",
+				requestMetricPrefix + "response.body.size", "soklet.server.request.throwables",
+				"soklet.server.response.write.duration", "soklet.server.response.write.failures");
+		Set<String> expectedMetricNames = new LinkedHashSet<>(requestMetricNames);
+		expectedMetricNames.addAll(Set.of("soklet.server.connections.accepted",
+				"soklet.server.connections.rejected", "soklet.server.requests.accepted",
+				"soklet.server.requests.rejected", "soklet.server.request.read.failures",
+				"soklet.server.transport.failures"));
+		Collection<MetricData> metrics = harness.metricReader().collectAllMetrics();
+		Assertions.assertEquals(expectedMetricNames,
+				metrics.stream().map(MetricData::getName).collect(Collectors.toSet()));
+		Assertions.assertAll(strategy.toString(), metrics.stream().map(metric -> () -> {
+			if (semconv && requestMetricNames.contains(metric.getName())) {
+				for (Attributes attributes : metricAttributes(metric)) {
+					Assertions.assertNull(attributes.get(SERVER_TYPE_ATTRIBUTE_KEY), metric.getName());
+					Assertions.assertEquals("http", attributes.get(AttributeKey.stringKey("url.scheme")),
+							metric.getName());
+				}
+			} else {
+				Set<String> expectedTypes = metric.getName().equals("soklet.server.transport.failures")
+						? Set.of("http", "sse", "mcp") : Set.of("http", "sse");
+				Assertions.assertEquals(expectedTypes,
+						stringAttributeValues(metrics, metric.getName(), SERVER_TYPE_ATTRIBUTE_KEY), metric.getName());
+			}
+		}));
 	}
 
 	@Test
@@ -693,6 +769,69 @@ public class OpenTelemetryMetricsCollectorTests {
 	}
 
 	@Test
+	public void httpNamingStrategiesChangeOnlyFourInstrumentNames() {
+		Set<String> semconvNames = new LinkedHashSet<>();
+		Set<String> sokletNames = new LinkedHashSet<>();
+		TestHarness harness = TestHarness.create();
+		OpenTelemetryMetricsCollector.withMeter(recordingMeter(
+				harness.openTelemetrySdk().getMeter("test-all-semconv-names"), semconvNames)).build();
+		OpenTelemetryMetricsCollector.withMeter(recordingMeter(
+				harness.openTelemetrySdk().getMeter("test-all-soklet-names"), sokletNames))
+				.metricNamingStrategy(OpenTelemetryMetricsCollector.MetricNamingStrategy.SOKLET).build();
+
+		Set<String> semconvOnly = new LinkedHashSet<>(semconvNames);
+		semconvOnly.removeAll(sokletNames);
+		Set<String> sokletOnly = new LinkedHashSet<>(sokletNames);
+		sokletOnly.removeAll(semconvNames);
+		Assertions.assertEquals(Set.of("http.server.active_requests", "http.server.request.duration",
+				"http.server.request.body.size", "http.server.response.body.size"), semconvOnly);
+		Assertions.assertEquals(Set.of("soklet.server.requests.active", "soklet.server.request.duration",
+				"soklet.server.request.body.size", "soklet.server.response.body.size"), sokletOnly);
+		Assertions.assertTrue(semconvNames.contains("soklet.server.request.throwables"));
+		Assertions.assertTrue(sokletNames.contains("soklet.server.request.throwables"));
+	}
+
+	@Test
+	public void requestThrowableCounterCountsThrowablesWithDurationAttributes() throws Exception {
+		for (OpenTelemetryMetricsCollector.MetricNamingStrategy strategy :
+				OpenTelemetryMetricsCollector.MetricNamingStrategy.values()) {
+			TestHarness harness = TestHarness.create();
+			OpenTelemetryMetricsCollector collector = OpenTelemetryMetricsCollector
+					.withMeter(harness.openTelemetrySdk().getMeter("test-throwables-" + strategy))
+					.metricNamingStrategy(strategy).build();
+			ResourceMethod resourceMethod = createResourceMethod(HttpMethod.GET, "/accounts/{id}", "product");
+			Request request = Request.fromPath(HttpMethod.GET, "/accounts/123");
+			collector.didStartRequestHandling(ServerType.HTTP, request, resourceMethod);
+			collector.didFinishRequestHandling(ServerType.HTTP, request, resourceMethod,
+					MarshaledResponse.fromStatusCode(500), Duration.ofMillis(2),
+					List.of(new IllegalStateException("private first detail"),
+							new IllegalArgumentException("private second detail")));
+
+			Collection<MetricData> metrics = harness.metricReader().collectAllMetrics();
+			MetricData throwableMetric = metricByName(metrics, "soklet.server.request.throwables");
+			Assertions.assertEquals("{throwable}", throwableMetric.getUnit());
+			Assertions.assertTrue(throwableMetric.getLongSumData().isMonotonic());
+			Assertions.assertEquals(1, throwableMetric.getLongSumData().getPoints().size());
+			var point = throwableMetric.getLongSumData().getPoints().iterator().next();
+			Assertions.assertEquals(2L, point.getValue());
+			var expected = Attributes.builder()
+					.put(HTTP_METHOD_ATTRIBUTE_KEY, "GET")
+					.put(ROUTE_ATTRIBUTE_KEY, "/accounts/{id}")
+					.put(STATUS_CODE_ATTRIBUTE_KEY, 500L)
+					.put(ERROR_TYPE_ATTRIBUTE_KEY, IllegalStateException.class.getName());
+			if (strategy == OpenTelemetryMetricsCollector.MetricNamingStrategy.SEMCONV)
+				expected.put("url.scheme", "http");
+			else
+				expected.put(SERVER_TYPE_ATTRIBUTE_KEY, "http");
+			Assertions.assertEquals(expected.build(), point.getAttributes());
+			String durationName = strategy == OpenTelemetryMetricsCollector.MetricNamingStrategy.SEMCONV
+					? "http.server.request.duration" : "soklet.server.request.duration";
+			Assertions.assertEquals(point.getAttributes(), metricByName(metrics, durationName)
+					.getHistogramData().getPoints().iterator().next().getAttributes());
+		}
+	}
+
+	@Test
 	public void supportsSokletNamingStrategy() throws Exception {
 		TestHarness harness = TestHarness.create();
 		OpenTelemetryMetricsCollector collector = OpenTelemetryMetricsCollector
@@ -704,8 +843,8 @@ public class OpenTelemetryMetricsCollectorTests {
 		Request request = Request.fromPath(HttpMethod.GET, "/accounts/123");
 		MarshaledResponse response = MarshaledResponse.fromStatusCode(200);
 
-		collector.didStartRequestHandling(ServerType.STANDARD_HTTP, request, resourceMethod);
-		collector.didFinishRequestHandling(ServerType.STANDARD_HTTP, request, resourceMethod, response,
+		collector.didStartRequestHandling(ServerType.HTTP, request, resourceMethod);
+		collector.didFinishRequestHandling(ServerType.HTTP, request, resourceMethod, response,
 				Duration.ofMillis(2), List.of());
 
 		Collection<MetricData> metrics = harness.metricReader().collectAllMetrics();
@@ -737,8 +876,8 @@ public class OpenTelemetryMetricsCollectorTests {
 			executorService.submit(() -> {
 				try {
 					for (int j = 0; j < iterationsPerWorker; j++) {
-						collector.didStartRequestHandling(ServerType.STANDARD_HTTP, request, resourceMethod);
-						collector.didFinishRequestHandling(ServerType.STANDARD_HTTP, request, resourceMethod, response,
+						collector.didStartRequestHandling(ServerType.HTTP, request, resourceMethod);
+						collector.didFinishRequestHandling(ServerType.HTTP, request, resourceMethod, response,
 								Duration.ofMillis(1), List.of());
 					}
 				} finally {

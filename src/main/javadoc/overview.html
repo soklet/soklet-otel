@@ -30,6 +30,47 @@
     <br/><br/>
     Version <code>2.0.0</code> targets provided Soklet <code>4.0.0</code>. The prior soklet-otel 1.3.1 release
     targets Soklet 3.5.1.
+    <h2>HTTP metrics and span vocabulary in 2.0.0</h2>
+    <table>
+      <caption>HTTP metric naming strategies (default: SEMCONV)</caption>
+      <thead><tr><th>SEMCONV name</th><th>SOKLET name</th><th>Kind and unit</th></tr></thead>
+      <tbody>
+        <tr><td><code>http.server.active_requests</code></td><td><code>soklet.server.requests.active</code></td><td>Up-down counter, <code>{request}</code></td></tr>
+        <tr><td><code>http.server.request.duration</code></td><td><code>soklet.server.request.duration</code></td><td>Histogram, <code>s</code></td></tr>
+        <tr><td><code>http.server.request.body.size</code></td><td><code>soklet.server.request.body.size</code></td><td>Histogram, <code>By</code></td></tr>
+        <tr><td><code>http.server.response.body.size</code></td><td><code>soklet.server.response.body.size</code></td><td>Histogram, <code>By</code></td></tr>
+      </tbody>
+    </table>
+    <p>
+      Request-body size uses encoded payload bytes as transferred (excluding headers and transfer framing)
+      under <code>SEMCONV</code>, and handler-visible bytes under <code>SOKLET</code>.
+      Response-body size uses the finalized marshaled representation under either strategy, before later transport gzip.
+      All other metric names are independent of the naming strategy.
+    </p>
+    <p>
+      <code>soklet.server.request.throwables</code> is a Counter with unit <code>{throwable}</code>.
+      It counts observed throwables, not failed requests: two throwables increment the counter by two.
+      Its request-duration attributes are <code>http.request.method</code>,
+      <code>http.response.status_code</code>, and <code>error.type</code> containing the first throwable's class name.
+      <code>SEMCONV</code> additionally uses <code>url.scheme=http</code> and <code>http.route</code> for matched routes;
+      <code>SOKLET</code> uses <code>soklet.server.type</code> and <code>http.route</code> (including <code>_unmatched</code>).
+      Throwable messages, stack traces, and attributes from later throwables are not exported by the counter.
+    </p>
+    <p>
+      In 2.0.0, metrics and spans share the <code>soklet.server.type</code> vocabulary:
+      <code>http</code> (including streaming HTTP), <code>sse</code>, or <code>mcp</code>.
+      Migrate HTTP metric filters from <code>standard_http</code> to <code>http</code> and SSE span filters
+      from <code>server_sent_event</code> to <code>sse</code>. HTTP spans retain <code>http</code>;
+      SSE metrics retain <code>sse</code>, and MCP retains <code>mcp</code> across both signals.
+    </p>
+    <p>
+      The HTTP metric-label change affects Soklet connection, request-acceptance, request-read-failure,
+      and transport-failure counters under both naming strategies, including <code>SEMCONV</code>.
+      Request-handling and response-write metrics (including <code>soklet.server.request.throwables</code>)
+      carry <code>soklet.server.type</code> only under <code>SOKLET</code>.
+      Standard HTTP instrument names, semantic-convention attributes, and <code>url.scheme=http</code>
+      do not change; this migration adds no attributes to metrics that omit them.
+    </p>
     <h2>MCP metrics in 2.0.0</h2>
     All 23 modern <code>McpMetricsEvent</code> variants map to exactly 21 dedicated MCP instruments plus the
     existing shared transport-failure instrument. Dedicated MCP names are independent of the HTTP metric naming
@@ -82,7 +123,7 @@
         <code>write_failed</code>.</li>
       <li>Request stream and subscription: <code>completed</code>, <code>client_disconnected</code>,
         <code>request_canceled</code>, <code>deadline_exceeded</code>, <code>write_failed</code>,
-        <code>backpressure</code>, <code>server_stopped</code>,
+        <code>backpressure</code>, <code>server_stopping</code>,
         <code>simulator_capture_item_limit_exceeded</code>, <code>simulator_capture_byte_limit_exceeded</code>,
         <code>internal_error</code>.</li>
       <li>Transport failure: <code>request_read_timeout</code>, <code>request_too_large</code>,
@@ -181,8 +222,9 @@
       <code>#concurrentMcpSpansRemainContextIsolatedAndCloseDrainsEveryState</code>, and
       <code>#mcpSpanProjectionExcludesSensitiveContextAndHttpFallbackCanaries</code>.
       <code>OpenTelemetryLifecycleObserverTests#legacyMcpSessionTracingSurfacesRemainAbsentAndModernRequestCallbacksAreImplemented</code>
-      freezes the public boundary. The focused selection is green at 23 tests; all 36 module tests pass on
-      JDK 17, 21, and 25, and offline package/source/Javadoc assembly plus standalone Javadoc generation are green.
+      freezes the public boundary. The release verification contract runs the full test suite on
+      JDK 17, 21, and 25 and builds the package, sources, attached Javadocs, and standalone Javadocs against exact
+      Soklet 4.0.0.
     </p>
     <br/>
     <strong>Please refer to the official documentation at <a href="https://www.soklet.com" target="_blank">https://www.soklet.com</a>.</strong>
