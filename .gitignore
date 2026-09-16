@@ -28,3 +28,6 @@ replay_pid*
 
 # Maven build output
 target/
+
+# CI verifier bytecode cache
+__pycache__/

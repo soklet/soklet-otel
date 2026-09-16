@@ -7,9 +7,12 @@ on:
   workflow_dispatch:
     inputs:
       soklet_ref:
-        description: Soklet repository ref to install before building soklet-otel
+        description: Exact 40-character Soklet commit SHA to validate (not a branch or tag)
         required: false
-        default: master
+        default: bec221595b9730e8f55c55c2c0bb93968d3fae92
+
+env:
+  SOKLET_CANDIDATE_SHA: ${{ inputs.soklet_ref || 'bec221595b9730e8f55c55c2c0bb93968d3fae92' }}
 
 # Cancel superseded runs on the same ref to save time and reduce noise.
 concurrency:
@@ -31,12 +34,30 @@ jobs:
         with:
           path: soklet-otel
 
+      - name: Validate candidate selector
+        shell: bash
+        run: |
+          if [[ ! "$SOKLET_CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::soklet_ref must be an exact 40-character lowercase commit SHA, not a branch or tag"
+            exit 1
+          fi
+
       - name: Check out soklet
         uses: actions/checkout@v6
         with:
           repository: soklet/soklet
-          ref: ${{ inputs.soklet_ref || 'master' }}
+          ref: ${{ env.SOKLET_CANDIDATE_SHA }}
           path: soklet
+
+      - name: Test candidate verification
+        run: python3 -m unittest discover -s soklet-otel/scripts -p 'test_*.py'
+
+      - name: Verify candidate identity and declared Soklet baseline
+        run: >-
+          python3 soklet-otel/scripts/verify-soklet-candidate.py
+          --expected-commit "$SOKLET_CANDIDATE_SHA"
+          --core-directory soklet
+          --otel-directory soklet-otel
 
       - name: Set up JDK ${{ matrix.jdk }}
         uses: actions/setup-java@v5
@@ -48,13 +69,8 @@ jobs:
       - name: Install checked-out Soklet
         run: mvn -B -ntp -f soklet/pom.xml -DskipTests -Dgpg.skip=true install
 
-      - name: Resolve checked-out Soklet version
-        id: soklet-version
-        shell: bash
-        run: echo "version=$(mvn -q -f soklet/pom.xml help:evaluate -Dexpression=project.version -DforceStdout)" >> "$GITHUB_OUTPUT"
-
       - name: Run tests
-        run: mvn -B -ntp -f soklet-otel/pom.xml -Dsoklet.version=${{ steps.soklet-version.outputs.version }} test
+        run: mvn -B -ntp -f soklet-otel/pom.xml test
 
       - name: Build Javadoc
-        run: mvn -B -ntp -f soklet-otel/pom.xml -Dsoklet.version=${{ steps.soklet-version.outputs.version }} javadoc:javadoc
+        run: mvn -B -ntp -f soklet-otel/pom.xml javadoc:javadoc

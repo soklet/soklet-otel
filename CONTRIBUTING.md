@@ -7,10 +7,25 @@ Pull requests and bug reports are welcomed.  For enhancement pull requests, plea
 #### Local Installation
 
 ```shell
-$ mvn install
+$ mvn -Dgpg.skip=true install
 ```
 
-This will build artifacts and install to your local system's Maven repository.
+This will test and build unsigned development artifacts and install them to your
+local Maven repository. Use `mvn -Dgpg.skip=true verify` to check the build without
+installing it. Signing and publication are separate, explicitly authorized steps.
+
+#### Continuous Integration
+
+CI builds on JDK 17, 21, and 25 against the exact Soklet commit pinned in
+`.github/workflows/ci.yml`. For a manual run, `soklet_ref` accepts a full lowercase
+40-character commit SHA, not a branch, tag, or abbreviated SHA. Update both the
+manual default and automatic fallback together when selecting a new candidate.
+
+Before installing core, CI verifies that the checkout matches the requested SHA
+and that its POM version matches this project's declared `soklet.version` baseline.
+The selected commit and coordinates appear in the build log. Tests and Javadoc
+use the dependency declared in `pom.xml`, without overriding it for an arbitrary
+checkout. These checks validate a candidate; they do not publish either project.
 
 #### Publishing to Maven Central
 
