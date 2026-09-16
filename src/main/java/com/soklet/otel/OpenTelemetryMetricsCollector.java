@@ -309,7 +309,8 @@ public final class OpenTelemetryMetricsCollector implements MetricsCollector {
 
 	/**
 	 * Acquires a builder for {@link OpenTelemetryMetricsCollector} instances, using {@link GlobalOpenTelemetry}
-	 * by default.
+	 * by default. The global instance is resolved at {@link Builder#build()} time only when no explicit
+	 * OpenTelemetry instance or meter has been supplied.
 	 *
 	 * @return the builder
 	 */
@@ -1031,21 +1032,27 @@ public final class OpenTelemetryMetricsCollector implements MetricsCollector {
 
 	@Override
 	public void didBroadcastSseEvent(@NonNull ResourcePathDeclaration route,
-																	 int attempted,
-																	 int enqueued,
-																	 int dropped) {
+																	 @NonNull Integer attempted,
+																	 @NonNull Integer enqueued,
+																	 @NonNull Integer dropped) {
 		requireNonNull(route);
+		requireNonNull(attempted);
+		requireNonNull(enqueued);
+		requireNonNull(dropped);
 		recordBroadcastTotals(route, BROADCAST_PAYLOAD_EVENT, UNKNOWN_COMMENT_TYPE, attempted, enqueued, dropped);
 	}
 
 	@Override
 	public void didBroadcastSseComment(@NonNull ResourcePathDeclaration route,
 																		 SseComment.@NonNull CommentType commentType,
-																		 int attempted,
-																		 int enqueued,
-																		 int dropped) {
+																		 @NonNull Integer attempted,
+																		 @NonNull Integer enqueued,
+																		 @NonNull Integer dropped) {
 		requireNonNull(route);
 		requireNonNull(commentType);
+		requireNonNull(attempted);
+		requireNonNull(enqueued);
+		requireNonNull(dropped);
 		recordBroadcastTotals(route, BROADCAST_PAYLOAD_COMMENT, enumValue(commentType), attempted, enqueued, dropped);
 	}
 
@@ -1332,10 +1339,10 @@ public final class OpenTelemetryMetricsCollector implements MetricsCollector {
 		private String instrumentationVersion;
 
 		private Builder() {
-			this.openTelemetry = GlobalOpenTelemetry.get();
+			this.openTelemetry = null;
 			this.metricNamingStrategy = MetricNamingStrategy.SEMCONV;
 			this.instrumentationName = DEFAULT_INSTRUMENTATION_NAME;
-			this.instrumentationVersion = null;
+			this.instrumentationVersion = InstrumentationScope.defaultVersion();
 		}
 
 		/**
@@ -1388,6 +1395,7 @@ public final class OpenTelemetryMetricsCollector implements MetricsCollector {
 
 		/**
 		 * Sets an optional instrumentation scope version to use when constructing a meter.
+		 * The default is this library's packaged implementation version, or {@code null} when unavailable.
 		 *
 		 * @param instrumentationVersion the instrumentation scope version, or {@code null}
 		 * @return this builder
@@ -1403,7 +1411,9 @@ public final class OpenTelemetryMetricsCollector implements MetricsCollector {
 			if (this.meter != null)
 				return this.meter;
 
-			MeterBuilder meterBuilder = requireNonNull(this.openTelemetry).meterBuilder(this.instrumentationName);
+			OpenTelemetry resolvedOpenTelemetry = this.openTelemetry == null
+					? GlobalOpenTelemetry.get() : this.openTelemetry;
+			MeterBuilder meterBuilder = resolvedOpenTelemetry.meterBuilder(this.instrumentationName);
 
 			if (this.instrumentationVersion != null)
 				meterBuilder = meterBuilder.setInstrumentationVersion(this.instrumentationVersion);

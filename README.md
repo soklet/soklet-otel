@@ -21,7 +21,7 @@ a production-oriented implementation of Soklet's
 [`LifecycleObserver`](https://javadoc.soklet.com/com/soklet/LifecycleObserver.html) interface.
 
 The metrics collector records HTTP, SSE, and modern MCP event telemetry into OpenTelemetry
-[`Meter`](https://javadoc.io/doc/io.opentelemetry/opentelemetry-api/1.59.0/io/opentelemetry/api/metrics/Meter.html)
+[`Meter`](https://javadoc.io/doc/io.opentelemetry/opentelemetry-api/1.66.0/io/opentelemetry/api/metrics/Meter.html)
 instruments (counters, up-down counters,
 and histograms), so your existing OTel pipeline/exporter stack can collect and ship metrics.
 The lifecycle observer creates OpenTelemetry server spans for HTTP requests, streaming responses, SSE
@@ -88,15 +88,20 @@ Related API references:
 - [`OpenTelemetryLifecycleObserver`](https://otel.javadoc.soklet.com/com/soklet/otel/OpenTelemetryLifecycleObserver.html)
 - [`SpanPolicy`](https://otel.javadoc.soklet.com/com/soklet/otel/SpanPolicy.html)
 - [`SpanNamingStrategy`](https://otel.javadoc.soklet.com/com/soklet/otel/SpanNamingStrategy.html)
-- [`OpenTelemetry`](https://javadoc.io/doc/io.opentelemetry/opentelemetry-api/1.59.0/io/opentelemetry/api/OpenTelemetry.html)
-- [`Meter`](https://javadoc.io/doc/io.opentelemetry/opentelemetry-api/1.59.0/io/opentelemetry/api/metrics/Meter.html)
+- [`OpenTelemetry`](https://javadoc.io/doc/io.opentelemetry/opentelemetry-api/1.66.0/io/opentelemetry/api/OpenTelemetry.html)
+- [`Meter`](https://javadoc.io/doc/io.opentelemetry/opentelemetry-api/1.66.0/io/opentelemetry/api/metrics/Meter.html)
 - [`SokletConfig`](https://javadoc.soklet.com/com/soklet/SokletConfig.html)
 - [`HttpServer`](https://javadoc.soklet.com/com/soklet/HttpServer.html)
 - [`MetricsCollector`](https://javadoc.soklet.com/com/soklet/MetricsCollector.html)
 - [`LifecycleObserver`](https://javadoc.soklet.com/com/soklet/LifecycleObserver.html)
 
+Creating a builder does not read or initialize `GlobalOpenTelemetry`. If no explicit OpenTelemetry
+instance, meter, or tracer is configured, the global is resolved when `build()` is called, so register
+the SDK before building the integration. Both integrations default their instrumentation version to
+the library JAR's `Implementation-Version` when available; `instrumentationVersion(...)` overrides it.
+
 If you already have a
-[`Meter`](https://javadoc.io/doc/io.opentelemetry/opentelemetry-api/1.59.0/io/opentelemetry/api/metrics/Meter.html),
+[`Meter`](https://javadoc.io/doc/io.opentelemetry/opentelemetry-api/1.66.0/io/opentelemetry/api/metrics/Meter.html),
 wire directly:
 
 ```java
@@ -272,13 +277,23 @@ For HTTP and SSE, inbound W3C `traceparent` / `tracestate` headers parsed by
 the remote parent. Malformed or absent trace context produces a root span. Long-lived SSE spans may not appear
 in some tracing backends until the stream ends.
 
+HTTP spans correlate by the original per-dispatch `Request` instance, never by its caller-configurable
+ID. The simulator makes a dispatch copy so concurrent reuse of one input request is safe.
+Request wrapping and interception may replace requests and change IDs without merging concurrent
+spans or leaking them. The original request supplies parent trace context and HTTP method; the resolved
+resource method supplies the route. A streaming span ends after both handling completion and stream
+termination have been observed, including when the transport finishes first. HTTP 5xx responses without
+a throwable use the decimal status (for example, `503`) as `error.type`; throwable-free stream failures
+use the fixed lower-snake termination reason. Superseding a span or closing the observer does not label
+ordinary HTTP work as a stopped stream.
+
 MCP request spans use only the validated
 [`McpRequestContext::getTraceContext`](<https://javadoc.soklet.com/com/soklet/McpRequestContext.html#getTraceContext()>)
 value as their remote parent. The trace ID, parent ID, flags, and `tracestate` are preserved. Missing or invalid
 MCP metadata produces a root span; the observer never falls back to the physical HTTP request's trace context,
 the current OpenTelemetry `Context`, a link, or baggage.
 
-### MCP request spans in 2.0.0
+### MCP request spans
 
 `SpanPolicy.recordMcpRequestSpans()` defaults to `true` when an application installs the observer. One span
 starts at admitted semantic handling and ends at the supplied client-visible terminal duration. Preadmission
@@ -319,6 +334,12 @@ Trace IDs belong in spans and logs, not metric labels. If you need metrics-to-tr
 
 ## Server-Type Attribute Migration in 2.0.0
 
+Custom `MetricsCollector` overrides must use `@NonNull Integer` for the
+`attempted`, `enqueued`, and `dropped` parameters of `didBroadcastSseEvent`
+and `didBroadcastSseComment`. Recompile integrations against the matching
+core and OTel artifacts; the exported metric names, values, and attributes
+are unchanged by this signature correction.
+
 Metrics and spans use the same `soklet.server.type` vocabulary: `http` for HTTP
 (including streaming responses), `sse` for SSE, and `mcp` for MCP. Update HTTP metric
 filters, dashboards, and alerts from `standard_http` to `http`, and SSE span filters
@@ -336,32 +357,18 @@ including `SEMCONV`. Request-handling and response-write metrics (including
 Standard HTTP instrument names, semantic-convention attributes, and `url.scheme=http`
 are unchanged; this migration adds no attributes to metrics that omit them.
 
-## MCP Migration in 2.0.0
+## MCP telemetry integration
 
-The modern core protocol has no legacy MCP session abstraction. Accordingly, 2.0.0 removes
-the four `soklet.mcp.sessions.*` / `soklet.mcp.session.duration` instruments and consumes
-`McpMetricsEvent` through `OpenTelemetryMetricsCollector.didRecordMcpMetricsEvent(...)` instead of the removed
-session-era callbacks `didCreateMcpSession`, `didTerminateMcpSession`, `didEstablishMcpSseStream`, and
-`didTerminateMcpSseStream` or the legacy request-start/request-finish callback shapes.
+MCP metrics use
+`OpenTelemetryMetricsCollector.didRecordMcpMetricsEvent(McpMetricsEvent)`.
+`OpenTelemetryLifecycleObserver` projects admitted MCP request start and finish
+callbacks into the request spans described above. There are no separate MCP
+session instruments, session events, or request-stream spans.
 
-The release removes these public tracing controls rather than carrying their obsolete session-era semantics
-forward:
-
-- `SpanPolicy.recordMcpSessionEvents()` and `SpanPolicy.recordMcpSseStreamSpans()`, together with their builder
-  setters.
-- The old `SpanNamingStrategy.mcpRequestSpanName(Request, Class, String)` and
-  `SpanNamingStrategy.mcpSseStreamSpanName(McpSseStream)` methods, including the corresponding default-strategy
-  implementations.
-- Legacy MCP branches and session events in `OpenTelemetryLifecycleObserver`.
-
-The existing `SpanPolicy.recordMcpRequestSpans()` getter and builder setter remain, now with the admitted-request
-semantics documented above. `SpanNamingStrategy.mcpRequestSpanName(McpRequestContext)` replaces the old
-request-shaped method and has a default implementation, so custom strategies do not need to implement it. Old
-MCP naming overrides are no longer invoked and should be removed when recompiling custom strategies.
-
-Compared with released 1.3.1, the verified 2.0.0 public API delta is 13 removals and 4 additions. The
-four additions are the modern MCP metric callback, modern MCP request start and finish callbacks, and the
-context-shaped naming method.
+`SpanPolicy.recordMcpRequestSpans()` controls request-span recording.
+`SpanNamingStrategy.mcpRequestSpanName(McpRequestContext)` provides the custom
+naming hook and has a default implementation, so custom strategies do not need
+to implement it.
 
 ### 2.0.0 verification
 
@@ -392,7 +399,7 @@ Soklet 4.0.0.
 - With `SEMCONV`, `http.server.request.body.size` records the encoded payload size required by the OpenTelemetry HTTP semantic conventions, so a transparently decompressed gzip request reports its compressed size. With `SOKLET`, `soklet.server.request.body.size` records the handler-visible body size instead.
 - If Soklet rejects an oversized request before its complete encoded payload size is known, the `SEMCONV` body-size sample is omitted instead of recording an inaccurate zero.
 - `http.server.response.body.size` records the finalized [`MarshaledResponse`](https://javadoc.soklet.com/com/soklet/MarshaledResponse.html) size. If Soklet's HTTP transport applies dynamic gzip afterward, this remains the pre-compression size; already-encoded response bodies report their encoded size normally.
-- [`snapshot()`](<https://javadoc.soklet.com/com/soklet/MetricsCollector.html#snapshot()>) / [`snapshotText()`](<https://javadoc.soklet.com/com/soklet/MetricsCollector.html#snapshotText()>) from
+- [`snapshot()`](<https://javadoc.soklet.com/com/soklet/MetricsCollector.html#snapshot()>) / [`snapshotText(SnapshotTextOptions)`](<https://javadoc.soklet.com/com/soklet/MetricsCollector.html#snapshotText(com.soklet.MetricsCollector.SnapshotTextOptions)>) from
   [`MetricsCollector`](https://javadoc.soklet.com/com/soklet/MetricsCollector.html)
   are not implemented here; use your OpenTelemetry backend/exporter to query metrics.
 - The integration emits observations directly into the configured OpenTelemetry SDK. It does not promise core

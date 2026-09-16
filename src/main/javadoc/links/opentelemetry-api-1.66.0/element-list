@@ -1,0 +1,9 @@
+io.opentelemetry.api
+io.opentelemetry.api.baggage
+io.opentelemetry.api.baggage.propagation
+io.opentelemetry.api.common
+io.opentelemetry.api.impl
+io.opentelemetry.api.logs
+io.opentelemetry.api.metrics
+io.opentelemetry.api.trace
+io.opentelemetry.api.trace.propagation

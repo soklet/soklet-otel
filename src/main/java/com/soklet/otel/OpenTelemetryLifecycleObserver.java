@@ -155,6 +155,8 @@ public final class OpenTelemetryLifecycleObserver implements LifecycleObserver, 
 	private final ConcurrentMap<IdentityKey<SseConnection>, SpanState> sseConnectionSpans;
 	@Nullable
 	private final Runnable beforeMcpSpanPublication;
+	@Nullable
+	private final Runnable beforeSpanPublication;
 	@NonNull
 	private final AtomicBoolean closed;
 
@@ -195,6 +197,7 @@ public final class OpenTelemetryLifecycleObserver implements LifecycleObserver, 
 		this.mcpRequestSpans = new ConcurrentHashMap<>();
 		this.sseConnectionSpans = new ConcurrentHashMap<>();
 		this.beforeMcpSpanPublication = builder.beforeMcpSpanPublication;
+		this.beforeSpanPublication = builder.beforeSpanPublication;
 		this.closed = new AtomicBoolean(false);
 	}
 
@@ -210,9 +213,9 @@ public final class OpenTelemetryLifecycleObserver implements LifecycleObserver, 
 		if (!this.closed.compareAndSet(false, true))
 			return;
 
-		drain(this.httpRequestSpans);
+		drain(this.httpRequestSpans, false);
 		drainMcpRequestSpans();
-		drain(this.sseConnectionSpans);
+		drain(this.sseConnectionSpans, true);
 	}
 
 	@Override
@@ -245,7 +248,7 @@ public final class OpenTelemetryLifecycleObserver implements LifecycleObserver, 
 					return;
 				}
 
-				SpanState spanState = new SpanState(span, request, resourceMethod, startedAt);
+				SpanState spanState = new SpanState(span, startedAt);
 				storeReplacing(this.httpRequestSpans, new IdentityKey<>(request), spanState);
 			} catch (RuntimeException e) {
 				endSpanSafely(span);
@@ -277,13 +280,21 @@ public final class OpenTelemetryLifecycleObserver implements LifecycleObserver, 
 			return;
 
 		safelyRun(() -> {
-			boolean keepOpen = marshaledResponse.isStreaming() && this.spanPolicy.recordStreamingResponseSpans();
-
-			try {
-				applyHttpFinish(spanState.span(), resourceMethod, marshaledResponse, throwables);
-			} finally {
-				if (!keepOpen && this.httpRequestSpans.remove(key, spanState))
-					endSpanSafely(spanState.span(), spanState.startedAt().plus(duration));
+			synchronized (spanState) {
+				if (spanState.httpHandlingFinished)
+					return;
+				spanState.httpHandlingFinished = true;
+				boolean keepOpen = marshaledResponse.isStreaming() && this.spanPolicy.recordStreamingResponseSpans();
+				try {
+					applyHttpFinish(spanState.span(), resourceMethod, marshaledResponse, throwables);
+				} finally {
+					if (spanState.pendingHttpStreamTermination != null) {
+						finishHttpStream(key, spanState, spanState.pendingHttpStreamTermination,
+								requireNonNull(spanState.httpStreamFinishedAt));
+					} else if (!keepOpen && this.httpRequestSpans.remove(key, spanState)) {
+						endSpanSafely(spanState.span(), spanState.startedAt(), duration);
+					}
+				}
 			}
 		});
 	}
@@ -367,17 +378,41 @@ public final class OpenTelemetryLifecycleObserver implements LifecycleObserver, 
 
 		safelyRun(() -> {
 			IdentityKey<Request> key = new IdentityKey<>(streamingResponse.getRequest());
-			SpanState spanState = this.httpRequestSpans.remove(key);
-
-			if (spanState == null)
-				spanState = backfilledStreamingSpan(streamingResponse);
-
-			try {
-				applyStreamTermination(spanState.span(), termination);
-			} finally {
-				endSpanSafely(spanState.span(), streamingResponse.getEstablishedAt().plus(termination.getDuration()));
+			SpanState spanState = this.httpRequestSpans.get(key);
+			Instant finishedAt = streamingResponse.getEstablishedAt().plus(termination.getDuration());
+			if (spanState == null) {
+				SpanState backfilled = backfilledStreamingSpan(streamingResponse);
+				try {
+					applyHttpFinish(backfilled.span(), streamingResponse.getResourceMethod().orElse(null),
+							streamingResponse.getMarshaledResponse(), List.of());
+					applyStreamTermination(backfilled.span(), termination);
+				} finally {
+					endSpanSafely(backfilled.span(), finishedAt);
+				}
+				return;
+			}
+			synchronized (spanState) {
+				if (spanState.pendingHttpStreamTermination != null)
+					return;
+				// Transport completion can precede the synchronous handling-finish callback.
+				// Preserve both observations; do not end before HTTP status/throwables arrive.
+				spanState.pendingHttpStreamTermination = termination;
+				spanState.httpStreamFinishedAt = finishedAt;
+				if (spanState.httpHandlingFinished)
+					finishHttpStream(key, spanState, termination, finishedAt);
 			}
 		});
+	}
+
+	private void finishHttpStream(@NonNull IdentityKey<Request> key, @NonNull SpanState state,
+			@NonNull StreamTermination termination, @NonNull Instant finishedAt) {
+		if (!this.httpRequestSpans.remove(key, state))
+			return;
+		try {
+			applyStreamTermination(state.span(), termination);
+		} finally {
+			endSpanSafely(state.span(), finishedAt);
+		}
 	}
 
 	@Override
@@ -408,7 +443,7 @@ public final class OpenTelemetryLifecycleObserver implements LifecycleObserver, 
 				}
 
 				storeReplacing(this.sseConnectionSpans, new IdentityKey<>(sseConnection),
-						new SpanState(span, sseConnection.getRequest(), sseConnection.getResourceMethod(), sseConnection.getEstablishedAt()));
+						new SpanState(span, sseConnection.getEstablishedAt()));
 			} catch (RuntimeException e) {
 				endSpanSafely(span);
 				throw e;
@@ -540,7 +575,7 @@ public final class OpenTelemetryLifecycleObserver implements LifecycleObserver, 
 		if (!throwables.isEmpty()) {
 			span.setStatus(StatusCode.ERROR);
 		} else if (marshaledResponse.getStatusCode() >= 500) {
-			span.setAttribute(ERROR_TYPE_ATTRIBUTE_KEY, "http.status_code");
+			span.setAttribute(ERROR_TYPE_ATTRIBUTE_KEY, String.valueOf(marshaledResponse.getStatusCode()));
 			span.setStatus(StatusCode.ERROR);
 		}
 	}
@@ -591,7 +626,7 @@ public final class OpenTelemetryLifecycleObserver implements LifecycleObserver, 
 		try {
 			setRouteAttribute(span, stream.getResourceMethod().orElse(null));
 			setOptionalRequestAttributes(span, stream.getRequest());
-			return new SpanState(span, stream.getRequest(), stream.getResourceMethod().orElse(null), stream.getEstablishedAt());
+			return new SpanState(span, stream.getEstablishedAt());
 		} catch (RuntimeException e) {
 			endSpanSafely(span);
 			throw e;
@@ -606,8 +641,11 @@ public final class OpenTelemetryLifecycleObserver implements LifecycleObserver, 
 		span.setAttribute(STREAM_TERMINATION_REASON_ATTRIBUTE_KEY, enumValue(termination.getReason()));
 		termination.getCause().ifPresent(throwable -> recordException(span, throwable));
 
-		if (isError(termination))
+		if (isError(termination)) {
+			if (termination.getCause().isEmpty())
+				span.setAttribute(ERROR_TYPE_ATTRIBUTE_KEY, enumValue(termination.getReason()));
 			span.setStatus(StatusCode.ERROR);
+		}
 	}
 
 	private boolean isError(@NonNull StreamTermination termination) {
@@ -751,15 +789,21 @@ public final class OpenTelemetryLifecycleObserver implements LifecycleObserver, 
 
 		spanStates.compute(identityKey, (key, existingSpanState) -> {
 			if (existingSpanState != null)
-				endServerStopping(existingSpanState);
+				endSpanSafely(existingSpanState.span());
 
 			if (this.closed.get()) {
 				endSpanSafely(spanState.span());
 				return null;
 			}
+			if (this.beforeSpanPublication != null)
+				this.beforeSpanPublication.run();
 
 			return spanState;
 		});
+
+		// close() may have drained this map after the check inside compute but before publication.
+		if (this.closed.get() && spanStates.remove(identityKey, spanState))
+			endSpanSafely(spanState.span());
 	}
 
 	private void storeReplacingMcpRequestSpan(
@@ -790,15 +834,19 @@ public final class OpenTelemetryLifecycleObserver implements LifecycleObserver, 
 			endSpanSafely(spanState.span());
 	}
 
-	private void drain(@NonNull ConcurrentMap<?, SpanState> spanStates) {
+	private void drain(@NonNull ConcurrentMap<?, SpanState> spanStates, boolean stream) {
 		requireNonNull(spanStates);
 
 		for (Map.Entry<?, SpanState> entry : spanStates.entrySet()) {
 			try {
 				SpanState spanState = entry.getValue();
 
-				if (spanStates.remove(entry.getKey(), spanState))
-					endServerStopping(spanState);
+				if (spanStates.remove(entry.getKey(), spanState)) {
+					if (stream)
+						endServerStopping(spanState);
+					else
+						endSpanSafely(spanState.span());
+				}
 			} catch (RuntimeException e) {
 				// Drain must best-effort every active span even if one entry fails.
 			}
@@ -851,11 +899,13 @@ public final class OpenTelemetryLifecycleObserver implements LifecycleObserver, 
 		private SpanPolicy spanPolicy;
 		@Nullable
 		private Runnable beforeMcpSpanPublication;
+		@Nullable
+		private Runnable beforeSpanPublication;
 
 		private Builder() {
-			this.openTelemetry = GlobalOpenTelemetry.get();
+			this.openTelemetry = null;
 			this.instrumentationName = DEFAULT_INSTRUMENTATION_NAME;
-			this.instrumentationVersion = defaultInstrumentationVersion();
+			this.instrumentationVersion = InstrumentationScope.defaultVersion();
 			this.spanNamingStrategy = SpanNamingStrategy.defaultInstance();
 			this.spanPolicy = SpanPolicy.defaultInstance();
 			this.beforeMcpSpanPublication = null;
@@ -907,6 +957,12 @@ public final class OpenTelemetryLifecycleObserver implements LifecycleObserver, 
 		}
 
 		@NonNull
+		Builder beforeSpanPublicationForTesting(@NonNull Runnable hook) {
+			this.beforeSpanPublication = requireNonNull(hook);
+			return this;
+		}
+
+		@NonNull
 		public OpenTelemetryLifecycleObserver build() {
 			return new OpenTelemetryLifecycleObserver(this);
 		}
@@ -916,7 +972,9 @@ public final class OpenTelemetryLifecycleObserver implements LifecycleObserver, 
 			if (this.tracer != null)
 				return this.tracer;
 
-			TracerBuilder tracerBuilder = requireNonNull(this.openTelemetry).tracerBuilder(this.instrumentationName);
+			OpenTelemetry resolvedOpenTelemetry = this.openTelemetry == null
+					? GlobalOpenTelemetry.get() : this.openTelemetry;
+			TracerBuilder tracerBuilder = resolvedOpenTelemetry.tracerBuilder(this.instrumentationName);
 
 			if (this.instrumentationVersion != null)
 				tracerBuilder.setInstrumentationVersion(this.instrumentationVersion);
@@ -925,21 +983,25 @@ public final class OpenTelemetryLifecycleObserver implements LifecycleObserver, 
 		}
 	}
 
-	@Nullable
-	private static String defaultInstrumentationVersion() {
-		return OpenTelemetryLifecycleObserver.class.getPackage().getImplementationVersion();
-	}
+	private static final class SpanState {
+		private final @NonNull Span span;
+		private final @NonNull Instant startedAt;
+		// HTTP completion state is accessed only while synchronized on this SpanState.
+		private boolean httpHandlingFinished;
+		private @Nullable StreamTermination pendingHttpStreamTermination;
+		private @Nullable Instant httpStreamFinishedAt;
 
-	private record SpanState(
-			@NonNull Span span,
-			@NonNull Request request,
-			@Nullable ResourceMethod resourceMethod,
-			@NonNull Instant startedAt
-	) {
-		private SpanState {
-			requireNonNull(span);
-			requireNonNull(request);
-			requireNonNull(startedAt);
+		private SpanState(@NonNull Span span, @NonNull Instant startedAt) {
+			this.span = requireNonNull(span);
+			this.startedAt = requireNonNull(startedAt);
+		}
+
+		private @NonNull Span span() {
+			return this.span;
+		}
+
+		private @NonNull Instant startedAt() {
+			return this.startedAt;
 		}
 	}
 

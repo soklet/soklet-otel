@@ -14,6 +14,9 @@ on:
 env:
   SOKLET_CANDIDATE_SHA: ${{ inputs.soklet_ref || 'bec221595b9730e8f55c55c2c0bb93968d3fae92' }}
 
+permissions:
+  contents: read
+
 # Cancel superseded runs on the same ref to save time and reduce noise.
 concurrency:
   group: ci-${{ github.ref }}
@@ -33,6 +36,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           path: soklet-otel
+          persist-credentials: false
 
       - name: Validate candidate selector
         shell: bash
@@ -48,6 +52,10 @@ jobs:
           repository: soklet/soklet
           ref: ${{ env.SOKLET_CANDIDATE_SHA }}
           path: soklet
+          persist-credentials: false
+
+      - name: Verify pinned Javadoc indexes
+        run: node soklet-otel/scripts/verify-javadoc-links.mjs
 
       - name: Test candidate verification
         run: python3 -m unittest discover -s soklet-otel/scripts -p 'test_*.py'
@@ -59,8 +67,23 @@ jobs:
           --core-directory soklet
           --otel-directory soklet-otel
 
+      - name: Install checksum-pinned JDK 26 for documentation
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="${RUNNER_TEMP}/amazon-corretto-26.0.2.11.1-linux-x64.tar.gz"
+          curl --proto '=https' --tlsv1.2 --fail --location --silent --show-error \
+            https://corretto.aws/downloads/resources/26.0.2.11.1/amazon-corretto-26.0.2.11.1-linux-x64.tar.gz \
+            --output "$archive"
+          printf 'f61206891b8e1009b117eefe38784cf31b0a5cdb02fd2e023556f436b85dedaa  %s\n' "$archive" \
+            | sha256sum --check --strict
+          tar -xzf "$archive" -C "$RUNNER_TEMP"
+          docs_home="${RUNNER_TEMP}/amazon-corretto-26.0.2.11.1-linux-x64"
+          test "$("$docs_home/bin/javadoc" --version)" = 'javadoc 26.0.2.1'
+          printf 'SOKLET_JAVADOC_HOME=%s\n' "$docs_home" >> "$GITHUB_ENV"
+
       - name: Set up JDK ${{ matrix.jdk }}
-        uses: actions/setup-java@v5
+        uses: actions/setup-java@v6
         with:
           distribution: corretto
           java-version: ${{ matrix.jdk }}
@@ -69,8 +92,14 @@ jobs:
       - name: Install checked-out Soklet
         run: mvn -B -ntp -f soklet/pom.xml -DskipTests -Dgpg.skip=true install
 
-      - name: Run tests
-        run: mvn -B -ntp -f soklet-otel/pom.xml test
+      - name: Unpack exact-candidate core Javadoc index
+        shell: bash
+        run: |
+          mkdir core-javadoc
+          unzip -q soklet/target/soklet-4.0.0-javadoc.jar -d core-javadoc
+          test -f core-javadoc/element-list
 
-      - name: Build Javadoc
-        run: mvn -B -ntp -f soklet-otel/pom.xml javadoc:javadoc
+      - name: Verify integration and packaged Javadoc
+        run: >-
+          mvn -B -ntp -f soklet-otel/pom.xml -Dgpg.skip=true
+          -Dsoklet.javadoc.location="${{ github.workspace }}/core-javadoc" clean verify

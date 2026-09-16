@@ -436,6 +436,42 @@ public class OpenTelemetryMetricsCollectorTests {
 	}
 
 	@Test
+	public void broadcastCountsAreNonNullBoxedAndInvalidCallsDoNotRecordMetrics() throws Exception {
+		for (String methodName : List.of("didBroadcastSseEvent", "didBroadcastSseComment")) {
+			Class<?>[] types = methodName.endsWith("Event")
+					? new Class<?>[]{ResourcePathDeclaration.class, Integer.class, Integer.class, Integer.class}
+					: new Class<?>[]{ResourcePathDeclaration.class, SseComment.CommentType.class,
+							Integer.class, Integer.class, Integer.class};
+			var parameters = OpenTelemetryMetricsCollector.class.getMethod(methodName, types)
+					.getAnnotatedParameterTypes();
+			for (int index = parameters.length - 3; index < parameters.length; index++)
+				Assertions.assertTrue(parameters[index].isAnnotationPresent(NonNull.class));
+		}
+
+		TestHarness harness = TestHarness.create();
+		OpenTelemetryMetricsCollector collector = OpenTelemetryMetricsCollector
+				.withMeter(harness.openTelemetrySdk().getMeter("test-boxed-broadcast-counts")).build();
+		ResourcePathDeclaration route = ResourcePathDeclaration.fromPath("/chat");
+		for (Integer[] counts : List.of(new Integer[]{null, 2, 1},
+				new Integer[]{3, null, 1}, new Integer[]{3, 2, null})) {
+			Assertions.assertThrows(NullPointerException.class, () -> collector.didBroadcastSseEvent(
+					route, counts[0], counts[1], counts[2]));
+			Assertions.assertThrows(NullPointerException.class, () -> collector.didBroadcastSseComment(
+					route, SseComment.CommentType.COMMENT, counts[0], counts[1], counts[2]));
+		}
+		Assertions.assertTrue(harness.metricReader().collectAllMetrics().stream()
+				.noneMatch(metric -> metric.getName().startsWith("soklet.sse.broadcast.")));
+		collector.didBroadcastSseComment(route, SseComment.CommentType.COMMENT, 3, 2, 1);
+		Collection<MetricData> metrics = harness.metricReader().collectAllMetrics();
+		Assertions.assertEquals(3L, longSumValue(metrics, "soklet.sse.broadcast.attempted",
+				attributes -> "/chat".equals(attributes.get(ROUTE_ATTRIBUTE_KEY))));
+		Assertions.assertEquals(2L, longSumValue(metrics, "soklet.sse.broadcast.enqueued",
+				attributes -> "/chat".equals(attributes.get(ROUTE_ATTRIBUTE_KEY))));
+		Assertions.assertEquals(1L, longSumValue(metrics, "soklet.sse.broadcast.dropped",
+				attributes -> "/chat".equals(attributes.get(ROUTE_ATTRIBUTE_KEY))));
+	}
+
+	@Test
 	public void allTwentyThreeMcpEventsMapToExactTwentyTwoInstrumentsAndTransitions() {
 		List<McpEventExpectation> expectations = mcpEventExpectations();
 		Assertions.assertEquals(23, expectations.size());

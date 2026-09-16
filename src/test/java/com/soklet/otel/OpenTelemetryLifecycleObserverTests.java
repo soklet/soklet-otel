@@ -123,7 +123,7 @@ public class OpenTelemetryLifecycleObserverTests {
 
 		SpanData span = onlySpan(harness);
 		Assertions.assertEquals(StatusCode.ERROR, span.getStatus().getStatusCode());
-		Assertions.assertEquals("http.status_code", span.getAttributes().get(ERROR_TYPE_ATTRIBUTE_KEY));
+		Assertions.assertEquals("503", span.getAttributes().get(ERROR_TYPE_ATTRIBUTE_KEY));
 	}
 
 	@Test
@@ -314,7 +314,7 @@ public class OpenTelemetryLifecycleObserverTests {
 
 		Assertions.assertEquals(Integer.valueOf(1), observer.getActiveSpanCount());
 		Assertions.assertEquals(1, harness.spanExporter().getFinishedSpanItems().size());
-		Assertions.assertEquals("server_stopping", harness.spanExporter().getFinishedSpanItems().get(0)
+		Assertions.assertNull(harness.spanExporter().getFinishedSpanItems().get(0)
 				.getAttributes().get(STREAM_TERMINATION_REASON_ATTRIBUTE_KEY));
 
 		observer.didFinishRequestHandling(ServerType.HTTP, request, resourceMethod,
@@ -482,6 +482,81 @@ public class OpenTelemetryLifecycleObserverTests {
 	}
 
 	@Test
+	public void throwableFreeStreamFailuresHaveBoundedErrorTypes() throws Exception {
+		for (StreamTerminationReason reason : List.of(StreamTerminationReason.RESPONSE_TIMEOUT,
+				StreamTerminationReason.RESPONSE_IDLE_TIMEOUT, StreamTerminationReason.BACKPRESSURE,
+				StreamTerminationReason.WRITE_FAILED, StreamTerminationReason.PRODUCER_FAILED,
+				StreamTerminationReason.INTERNAL_ERROR)) {
+			TestHarness harness = TestHarness.create();
+			try (OpenTelemetryLifecycleObserver observer = OpenTelemetryLifecycleObserver
+					.withOpenTelemetry(harness.openTelemetrySdk()).build()) {
+				Request request = Request.fromPath(HttpMethod.GET, "/stream");
+				ResourceMethod resourceMethod = createResourceMethod(HttpMethod.GET, "/stream", "download");
+				MarshaledResponse response = MarshaledResponse.withStatusCode(200)
+						.stream(StreamingResponseBody.fromWriter((output, context) -> {})).build();
+				observer.didStartRequestHandling(ServerType.HTTP, request, null);
+				observer.didFinishRequestHandling(ServerType.HTTP, request, null, response, Duration.ZERO, List.of());
+				observer.didTerminateResponseStream(new TestStreamingResponseHandle(request, resourceMethod, response, Instant.now()),
+						StreamTermination.with(reason, Duration.ZERO).build());
+				SpanData span = onlySpan(harness);
+				Assertions.assertEquals(StatusCode.ERROR, span.getStatus().getStatusCode());
+				Assertions.assertEquals(reason.name().toLowerCase(java.util.Locale.ROOT),
+						span.getAttributes().get(ERROR_TYPE_ATTRIBUTE_KEY));
+				Assertions.assertEquals(0, observer.getActiveSpanCount());
+			} finally {
+				harness.openTelemetrySdk().close();
+			}
+		}
+	}
+
+	@Test
+	public void closeDuringHttpOrSsePublicationCannotStrandSpans() throws Exception {
+		for (boolean sse : List.of(false, true)) {
+			TestHarness harness = TestHarness.create();
+			java.util.concurrent.atomic.AtomicReference<OpenTelemetryLifecycleObserver> observerRef =
+					new java.util.concurrent.atomic.AtomicReference<>();
+			try (OpenTelemetryLifecycleObserver observer = OpenTelemetryLifecycleObserver
+					.withOpenTelemetry(harness.openTelemetrySdk())
+					.beforeSpanPublicationForTesting(() -> observerRef.get().close()).build()) {
+				observerRef.set(observer);
+				Request request = Request.fromPath(HttpMethod.GET, "/stream");
+				ResourceMethod method = createResourceMethod(HttpMethod.GET, "/stream", "download");
+				if (sse)
+					observer.didEstablishSseConnection(new TestSseConnection(request, method, Instant.now()));
+				else
+					observer.didStartRequestHandling(ServerType.HTTP, request, method);
+				Assertions.assertEquals(0, observer.getActiveSpanCount());
+				Assertions.assertEquals(1, harness.spanExporter().getFinishedSpanItems().size());
+			} finally {
+				harness.openTelemetrySdk().close();
+			}
+		}
+	}
+
+	@Test
+	public void closeDrainsAnEarlyStreamTerminationAwaitingHandlingFinish() throws Exception {
+		TestHarness harness = TestHarness.create();
+		try (OpenTelemetryLifecycleObserver observer = OpenTelemetryLifecycleObserver
+				.withOpenTelemetry(harness.openTelemetrySdk()).build()) {
+			Request request = Request.fromPath(HttpMethod.GET, "/stream");
+			ResourceMethod method = createResourceMethod(HttpMethod.GET, "/stream", "download");
+			MarshaledResponse response = MarshaledResponse.withStatusCode(200)
+					.stream(StreamingResponseBody.fromWriter((output, context) -> {})).build();
+			observer.didStartRequestHandling(ServerType.HTTP, request, method);
+			observer.didTerminateResponseStream(new TestStreamingResponseHandle(request, method, response, Instant.now()),
+					StreamTermination.with(StreamTerminationReason.COMPLETED, Duration.ZERO).build());
+			Assertions.assertEquals(1, observer.getActiveSpanCount());
+			Assertions.assertTrue(harness.spanExporter().getFinishedSpanItems().isEmpty());
+			observer.close();
+			observer.didFinishRequestHandling(ServerType.HTTP, request, method, response, Duration.ZERO, List.of());
+			Assertions.assertEquals(0, observer.getActiveSpanCount());
+			Assertions.assertEquals(1, harness.spanExporter().getFinishedSpanItems().size());
+		} finally {
+			harness.openTelemetrySdk().close();
+		}
+	}
+
+	@Test
 	public void closeDrainsActiveSpans() throws Exception {
 		TestHarness harness = TestHarness.create();
 		OpenTelemetryLifecycleObserver observer = OpenTelemetryLifecycleObserver
@@ -497,7 +572,7 @@ public class OpenTelemetryLifecycleObserverTests {
 		observer.close();
 
 		SpanData span = onlySpan(harness);
-		Assertions.assertEquals("server_stopping", span.getAttributes().get(STREAM_TERMINATION_REASON_ATTRIBUTE_KEY));
+		Assertions.assertNull(span.getAttributes().get(STREAM_TERMINATION_REASON_ATTRIBUTE_KEY));
 		Assertions.assertEquals(Integer.valueOf(0), observer.getActiveSpanCount());
 	}
 

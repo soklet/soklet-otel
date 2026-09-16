@@ -18,9 +18,9 @@
     Wire it into
     <a href="https://javadoc.soklet.com/com/soklet/SokletConfig.html"><code>SokletConfig</code></a>
     via <code>.metricsCollector(...)</code> and <code>.lifecycleObservers(...)</code> using either an
-    <a href="https://javadoc.io/doc/io.opentelemetry/opentelemetry-api/1.59.0/io/opentelemetry/api/OpenTelemetry.html"><code>OpenTelemetry</code></a>
+    <a href="https://javadoc.io/doc/io.opentelemetry/opentelemetry-api/1.66.0/io/opentelemetry/api/OpenTelemetry.html"><code>OpenTelemetry</code></a>
     instance, or via lower-level
-    <a href="https://javadoc.io/doc/io.opentelemetry/opentelemetry-api/1.59.0/io/opentelemetry/api/metrics/Meter.html"><code>Meter</code></a>
+    <a href="https://javadoc.io/doc/io.opentelemetry/opentelemetry-api/1.66.0/io/opentelemetry/api/metrics/Meter.html"><code>Meter</code></a>
     and <code>Tracer</code> instances.
     <br/><br/>
     By default, standard HTTP metrics use OpenTelemetry Semantic Convention names, while Soklet-specific metrics
@@ -30,6 +30,20 @@
     <br/><br/>
     Version <code>2.0.0</code> targets provided Soklet <code>4.0.0</code>. The prior soklet-otel 1.3.1 release
     targets Soklet 3.5.1.
+    <p>
+      Builders do not read or initialize <code>GlobalOpenTelemetry</code>. Without an explicit SDK, meter,
+      or tracer, they resolve the global only when <code>build()</code> is called. Both integrations use
+      the library's packaged <code>Implementation-Version</code> as the default instrumentation version
+      when available; an explicit instrumentation version overrides it.
+    </p>
+    <p>
+      HTTP spans correlate by the original per-dispatch request instance, not its configurable ID.
+      The simulator copies each dispatch so callers may concurrently reuse the same input request.
+      Wrapper/interceptor replacements do not change that identity or the HTTP parent trace context;
+      routing still uses the effective request. Streaming spans wait for both handling completion and
+      stream termination, in either order. HTTP 5xx responses without a throwable use the decimal status
+      as <code>error.type</code>; throwable-free stream failures use the lower-snake termination reason.
+    </p>
     <h2>HTTP metrics and span vocabulary in 2.0.0</h2>
     <table>
       <caption>HTTP metric naming strategies (default: SEMCONV)</caption>
@@ -147,6 +161,14 @@
       promise core snapshot/reset/filter, configured-zero, or cross-instrument atomicity semantics.
     </p>
     <h2>MCP request spans in 2.0.0</h2>
+    <p>
+      Compared with 1.3.1, MCP spans rename <code>rpc.system</code> to <code>rpc.system.name</code> and
+      <code>soklet.mcp.endpoint.class</code> to <code>soklet.mcp.endpoint</code>; the endpoint value is now
+      the registered path rather than a Java class name. The old long-valued span attribute
+      <code>rpc.jsonrpc.error_code</code> becomes decimal-string <code>rpc.response.status_code</code>.
+      Update trace queries and attribute-type expectations. The protocol-error metric still uses
+      long-valued <code>rpc.jsonrpc.error_code</code>.
+    </p>
     <p>
       When an application installs <code>OpenTelemetryLifecycleObserver</code>, the default-on
       <code>SpanPolicy.recordMcpRequestSpans()</code> creates one <code>SERVER</code> span for each admitted MCP
