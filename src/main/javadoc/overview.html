@@ -86,7 +86,7 @@
       do not change; this migration adds no attributes to metrics that omit them.
     </p>
     <h2>MCP metrics in 2.0.0</h2>
-    All 23 modern <code>McpMetricsEvent</code> variants map to exactly 21 dedicated MCP instruments plus the
+    All 24 modern <code>McpMetricsEvent</code> variants map to exactly 22 dedicated MCP instruments plus the
     existing shared transport-failure instrument. Dedicated MCP names are independent of the HTTP metric naming
     strategy.
     <table>
@@ -108,6 +108,7 @@
         <tr><td><code>soklet.mcp.request.stream.duration</code></td><td>Histogram, <code>s</code></td><td><code>soklet.mcp.endpoint</code>, <code>rpc.method</code>, <code>soklet.mcp.stream.termination.reason</code></td></tr>
         <tr><td><code>soklet.mcp.subscriptions.active</code></td><td>Up-down counter, <code>{subscription}</code></td><td>None</td></tr>
         <tr><td><code>soklet.mcp.subscription.duration</code></td><td>Histogram, <code>s</code></td><td><code>soklet.mcp.endpoint</code>, <code>soklet.mcp.subscription.termination.reason</code></td></tr>
+        <tr><td><code>soklet.mcp.subscription.maintenance</code></td><td>Counter, <code>{operation}</code></td><td><code>soklet.mcp.endpoint</code>, <code>soklet.mcp.subscription.maintenance.work</code>, <code>soklet.mcp.subscription.maintenance.outcome</code></td></tr>
         <tr><td><code>soklet.mcp.cancelations.signaled</code></td><td>Counter, <code>{cancelation}</code></td><td><code>soklet.mcp.endpoint</code>, <code>rpc.method</code></td></tr>
         <tr><td><code>soklet.mcp.progress.emitted</code></td><td>Counter, <code>{notification}</code></td><td><code>soklet.mcp.endpoint</code>, <code>rpc.method</code></td></tr>
         <tr><td><code>soklet.mcp.keepalives.emitted</code></td><td>Counter, <code>{comment}</code></td><td>None</td></tr>
@@ -139,7 +140,14 @@
         <code>request_canceled</code>, <code>deadline_exceeded</code>, <code>write_failed</code>,
         <code>backpressure</code>, <code>server_stopping</code>,
         <code>simulator_capture_item_limit_exceeded</code>, <code>simulator_capture_byte_limit_exceeded</code>,
+        <code>subscription_authorization_denied</code>, <code>subscription_authorization_expired</code>,
+        <code>subscription_authorization_check_failed</code>, <code>subscription_reconciliation_failed</code>,
         <code>internal_error</code>.</li>
+      <li>Subscription-maintenance work: <code>authorization</code>, <code>catalog_projection</code>,
+        <code>reconciliation</code>.</li>
+      <li>Subscription-maintenance outcome: <code>succeeded</code>, <code>denied</code>,
+        <code>timed_out</code>, <code>capacity_rejected</code>, <code>failed</code>, <code>coalesced</code>,
+        <code>stale_result_discarded</code>.</li>
       <li>Transport failure: <code>request_read_timeout</code>, <code>request_too_large</code>,
         <code>malformed_request</code>, <code>read_error</code>, <code>write_error</code>,
         <code>response_write_idle_timeout</code>, <code>response_ready_error</code>,

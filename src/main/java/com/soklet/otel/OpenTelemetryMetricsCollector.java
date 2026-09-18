@@ -138,6 +138,10 @@ public final class OpenTelemetryMetricsCollector implements MetricsCollector {
 	@NonNull
 	private static final AttributeKey<String> MCP_SUBSCRIPTION_TERMINATION_REASON_ATTRIBUTE_KEY;
 	@NonNull
+	private static final AttributeKey<String> MCP_SUBSCRIPTION_MAINTENANCE_WORK_ATTRIBUTE_KEY;
+	@NonNull
+	private static final AttributeKey<String> MCP_SUBSCRIPTION_MAINTENANCE_OUTCOME_ATTRIBUTE_KEY;
+	@NonNull
 	private static final AttributeKey<Long> RPC_JSON_RPC_ERROR_CODE_ATTRIBUTE_KEY;
 	@NonNull
 	private static final AttributeKey<String> MCP_SHUTDOWN_OUTCOME_ATTRIBUTE_KEY;
@@ -174,6 +178,10 @@ public final class OpenTelemetryMetricsCollector implements MetricsCollector {
 				AttributeKey.stringKey("soklet.mcp.stream.termination.reason");
 		MCP_SUBSCRIPTION_TERMINATION_REASON_ATTRIBUTE_KEY =
 				AttributeKey.stringKey("soklet.mcp.subscription.termination.reason");
+		MCP_SUBSCRIPTION_MAINTENANCE_WORK_ATTRIBUTE_KEY =
+				AttributeKey.stringKey("soklet.mcp.subscription.maintenance.work");
+		MCP_SUBSCRIPTION_MAINTENANCE_OUTCOME_ATTRIBUTE_KEY =
+				AttributeKey.stringKey("soklet.mcp.subscription.maintenance.outcome");
 		RPC_JSON_RPC_ERROR_CODE_ATTRIBUTE_KEY = AttributeKey.longKey("rpc.jsonrpc.error_code");
 		MCP_SHUTDOWN_OUTCOME_ATTRIBUTE_KEY = AttributeKey.stringKey("soklet.mcp.shutdown.outcome");
 		// SSE streams live for minutes-to-hours, so OpenTelemetry's request-oriented
@@ -287,6 +295,8 @@ public final class OpenTelemetryMetricsCollector implements MetricsCollector {
 	private final LongUpDownCounter mcpActiveSubscriptionsCounter;
 	@NonNull
 	private final DoubleHistogram mcpSubscriptionDurationHistogram;
+	@NonNull
+	private final LongCounter mcpSubscriptionMaintenanceCounter;
 	@NonNull
 	private final LongCounter mcpCancelationsSignaledCounter;
 	@NonNull
@@ -582,6 +592,10 @@ public final class OpenTelemetryMetricsCollector implements MetricsCollector {
 				.setUnit("s")
 				.setExplicitBucketBoundariesAdvice(MCP_LONG_LIVED_DURATION_BUCKET_BOUNDARIES)
 				.build();
+		this.mcpSubscriptionMaintenanceCounter = meter.counterBuilder("soklet.mcp.subscription.maintenance")
+				.setDescription("Total MCP subscription-maintenance outcomes by endpoint, work, and outcome.")
+				.setUnit("{operation}")
+				.build();
 		this.mcpCancelationsSignaledCounter = meter.counterBuilder("soklet.mcp.cancelations.signaled")
 				.setDescription("Total cooperative MCP request cancelations signaled by endpoint and method.")
 				.setUnit("{cancelation}")
@@ -720,6 +734,12 @@ public final class OpenTelemetryMetricsCollector implements MetricsCollector {
 			double durationSeconds = safeSeconds(subscriptionClosed.getDuration());
 			this.mcpActiveSubscriptionsCounter.add(-1);
 			this.mcpSubscriptionDurationHistogram.record(durationSeconds, attributes);
+		} else if (event instanceof McpMetricsEvent.SubscriptionMaintenance subscriptionMaintenance) {
+			this.mcpSubscriptionMaintenanceCounter.add(1,
+					mcpSubscriptionMaintenanceAttributes(
+							subscriptionMaintenance.getEndpointPath(),
+							subscriptionMaintenance.getWork(),
+							subscriptionMaintenance.getOutcome()));
 		} else if (event instanceof McpMetricsEvent.CancelationSignaled cancelationSignaled) {
 			this.mcpCancelationsSignaledCounter.add(1, mcpEndpointMethodAttributes(
 					cancelationSignaled.getEndpointPath(),
@@ -1181,6 +1201,20 @@ public final class OpenTelemetryMetricsCollector implements MetricsCollector {
 		return Attributes.of(
 				MCP_ENDPOINT_ATTRIBUTE_KEY, endpointPath,
 				MCP_SUBSCRIPTION_TERMINATION_REASON_ATTRIBUTE_KEY, enumValue(reason));
+	}
+
+	@NonNull
+	private static Attributes mcpSubscriptionMaintenanceAttributes(
+			@NonNull String endpointPath, @NonNull Enum<?> work,
+			@NonNull Enum<?> outcome) {
+		requireNonNull(endpointPath);
+		requireNonNull(work);
+		requireNonNull(outcome);
+		return Attributes.of(
+				MCP_ENDPOINT_ATTRIBUTE_KEY, endpointPath,
+				MCP_SUBSCRIPTION_MAINTENANCE_WORK_ATTRIBUTE_KEY, enumValue(work),
+				MCP_SUBSCRIPTION_MAINTENANCE_OUTCOME_ATTRIBUTE_KEY,
+				enumValue(outcome));
 	}
 
 	@NonNull

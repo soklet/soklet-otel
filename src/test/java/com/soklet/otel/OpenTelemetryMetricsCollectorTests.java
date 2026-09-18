@@ -20,6 +20,8 @@ import com.soklet.ConnectionRejectionReason;
 import com.soklet.HttpMethod;
 import com.soklet.MarshaledResponse;
 import com.soklet.McpMetricsEvent;
+import com.soklet.McpMetricsEvent.SubscriptionMaintenance.Outcome;
+import com.soklet.McpMetricsEvent.SubscriptionMaintenance.Work;
 import com.soklet.McpRequestOutcome;
 import com.soklet.McpStreamTerminationReason;
 import com.soklet.MetricsCollector;
@@ -94,6 +96,8 @@ public class OpenTelemetryMetricsCollectorTests {
 	private static final AttributeKey<String> MCP_REQUEST_OUTCOME_ATTRIBUTE_KEY = AttributeKey.stringKey("soklet.mcp.request.outcome");
 	private static final AttributeKey<String> MCP_STREAM_TERMINATION_REASON_ATTRIBUTE_KEY = AttributeKey.stringKey("soklet.mcp.stream.termination.reason");
 	private static final AttributeKey<String> MCP_SUBSCRIPTION_TERMINATION_REASON_ATTRIBUTE_KEY = AttributeKey.stringKey("soklet.mcp.subscription.termination.reason");
+	private static final AttributeKey<String> MCP_SUBSCRIPTION_MAINTENANCE_WORK_ATTRIBUTE_KEY = AttributeKey.stringKey("soklet.mcp.subscription.maintenance.work");
+	private static final AttributeKey<String> MCP_SUBSCRIPTION_MAINTENANCE_OUTCOME_ATTRIBUTE_KEY = AttributeKey.stringKey("soklet.mcp.subscription.maintenance.outcome");
 	private static final AttributeKey<Long> MCP_PROTOCOL_ERROR_CODE_ATTRIBUTE_KEY = AttributeKey.longKey("rpc.jsonrpc.error_code");
 	private static final AttributeKey<String> MCP_SHUTDOWN_OUTCOME_ATTRIBUTE_KEY = AttributeKey.stringKey("soklet.mcp.shutdown.outcome");
 	private static final Set<String> MCP_SHUTDOWN_OUTCOMES = Set.of(
@@ -472,9 +476,9 @@ public class OpenTelemetryMetricsCollectorTests {
 	}
 
 	@Test
-	public void allTwentyThreeMcpEventsMapToExactTwentyTwoInstrumentsAndTransitions() {
+	public void allTwentyFourMcpEventsMapToExactTwentyThreeInstrumentsAndTransitions() {
 		List<McpEventExpectation> expectations = mcpEventExpectations();
-		Assertions.assertEquals(23, expectations.size());
+		Assertions.assertEquals(24, expectations.size());
 		Assertions.assertEquals(
 				Set.copyOf(Arrays.asList(McpMetricsEvent.class.getPermittedSubclasses())),
 				expectations.stream().map(expectation -> expectation.event().getClass())
@@ -606,6 +610,11 @@ public class OpenTelemetryMetricsCollectorTests {
 			collector.didRecordMcpMetricsEvent(McpMetricsEvent.subscriptionClosed(
 					MCP_ENDPOINT, reason, Duration.ofSeconds(1)));
 		}
+		for (Work work : Work.values()) {
+			for (Outcome outcome : Outcome.values())
+				collector.didRecordMcpMetricsEvent(McpMetricsEvent
+						.subscriptionMaintenance(MCP_ENDPOINT, work, outcome));
+		}
 		for (MetricsCollector.TransportFailureReason reason :
 				MetricsCollector.TransportFailureReason.values())
 			collector.didRecordMcpMetricsEvent(McpMetricsEvent.transportFailure(reason));
@@ -631,6 +640,14 @@ public class OpenTelemetryMetricsCollectorTests {
 		Assertions.assertEquals(lowerSnakeValues(McpStreamTerminationReason.values()),
 				stringAttributeValues(metrics, "soklet.mcp.subscription.duration",
 						MCP_SUBSCRIPTION_TERMINATION_REASON_ATTRIBUTE_KEY));
+		Assertions.assertEquals(Set.of(MCP_ENDPOINT), stringAttributeValues(metrics,
+				"soklet.mcp.subscription.maintenance", MCP_ENDPOINT_ATTRIBUTE_KEY));
+		Assertions.assertEquals(lowerSnakeValues(Work.values()),
+				stringAttributeValues(metrics, "soklet.mcp.subscription.maintenance",
+						MCP_SUBSCRIPTION_MAINTENANCE_WORK_ATTRIBUTE_KEY));
+		Assertions.assertEquals(lowerSnakeValues(Outcome.values()),
+				stringAttributeValues(metrics, "soklet.mcp.subscription.maintenance",
+						MCP_SUBSCRIPTION_MAINTENANCE_OUTCOME_ATTRIBUTE_KEY));
 		Assertions.assertEquals(lowerSnakeValues(
 				MetricsCollector.TransportFailureReason.values()),
 				stringAttributeValues(metrics, "soklet.server.transport.failures",
@@ -760,6 +777,9 @@ public class OpenTelemetryMetricsCollectorTests {
 						collector.didRecordMcpMetricsEvent(McpMetricsEvent.subscriptionClosed(
 								MCP_ENDPOINT, McpStreamTerminationReason.COMPLETED,
 								Duration.ofSeconds(1)));
+						collector.didRecordMcpMetricsEvent(McpMetricsEvent
+								.subscriptionMaintenance(MCP_ENDPOINT,
+										Work.AUTHORIZATION, Outcome.SUCCEEDED));
 						collector.didRecordMcpMetricsEvent(McpMetricsEvent.handlerExecutionStarted());
 						collector.didRecordMcpMetricsEvent(McpMetricsEvent.handlerExecutionFinished());
 						collector.didRecordMcpMetricsEvent(McpMetricsEvent.handlerQueued());
@@ -796,6 +816,8 @@ public class OpenTelemetryMetricsCollectorTests {
 				"soklet.mcp.subscriptions.active", Attributes::isEmpty));
 		Assertions.assertEquals(expected, histogramCount(metrics,
 				"soklet.mcp.subscription.duration", attributes -> true));
+		Assertions.assertEquals(expected, longSumValue(metrics,
+				"soklet.mcp.subscription.maintenance", attributes -> true));
 		Assertions.assertEquals(0L, longSumValue(metrics,
 				"soklet.mcp.handler.executions.active", Attributes::isEmpty));
 		Assertions.assertEquals(0L, longSumValue(metrics,
@@ -975,6 +997,9 @@ public class OpenTelemetryMetricsCollectorTests {
 						Duration.ofSeconds(30)), Set.of(
 						"soklet.mcp.subscriptions.active",
 						"soklet.mcp.subscription.duration")),
+				new McpEventExpectation(McpMetricsEvent.subscriptionMaintenance(
+						MCP_ENDPOINT, Work.AUTHORIZATION, Outcome.SUCCEEDED),
+						Set.of("soklet.mcp.subscription.maintenance")),
 				new McpEventExpectation(McpMetricsEvent.cancelationSignaled(
 						MCP_ENDPOINT, MCP_METHOD),
 						Set.of("soklet.mcp.cancelations.signaled")),
@@ -1030,6 +1055,8 @@ public class OpenTelemetryMetricsCollectorTests {
 		collector.didRecordMcpMetricsEvent(McpMetricsEvent.subscriptionClosed(
 				MCP_ENDPOINT, McpStreamTerminationReason.COMPLETED,
 				Duration.ofSeconds(30)));
+		collector.didRecordMcpMetricsEvent(McpMetricsEvent.subscriptionMaintenance(
+				MCP_ENDPOINT, Work.AUTHORIZATION, Outcome.SUCCEEDED));
 		collector.didRecordMcpMetricsEvent(McpMetricsEvent.cancelationSignaled(
 				MCP_ENDPOINT, MCP_METHOD));
 		collector.didRecordMcpMetricsEvent(McpMetricsEvent.progressEmitted(
@@ -1064,6 +1091,7 @@ public class OpenTelemetryMetricsCollectorTests {
 				"soklet.mcp.request.stream.duration",
 				"soklet.mcp.subscriptions.active",
 				"soklet.mcp.subscription.duration",
+				"soklet.mcp.subscription.maintenance",
 				"soklet.mcp.cancelations.signaled",
 				"soklet.mcp.progress.emitted",
 				"soklet.mcp.keepalives.emitted",
@@ -1090,6 +1118,7 @@ public class OpenTelemetryMetricsCollectorTests {
 		units.put("soklet.mcp.request.stream.duration", "s");
 		units.put("soklet.mcp.subscriptions.active", "{subscription}");
 		units.put("soklet.mcp.subscription.duration", "s");
+		units.put("soklet.mcp.subscription.maintenance", "{operation}");
 		units.put("soklet.mcp.cancelations.signaled", "{cancelation}");
 		units.put("soklet.mcp.progress.emitted", "{notification}");
 		units.put("soklet.mcp.keepalives.emitted", "{comment}");
@@ -1124,6 +1153,10 @@ public class OpenTelemetryMetricsCollectorTests {
 		attributes.put("soklet.mcp.subscriptions.active", none);
 		attributes.put("soklet.mcp.subscription.duration", Set.of(
 				"soklet.mcp.endpoint", "soklet.mcp.subscription.termination.reason"));
+		attributes.put("soklet.mcp.subscription.maintenance", Set.of(
+				"soklet.mcp.endpoint",
+				"soklet.mcp.subscription.maintenance.work",
+				"soklet.mcp.subscription.maintenance.outcome"));
 		attributes.put("soklet.mcp.cancelations.signaled", endpointMethod);
 		attributes.put("soklet.mcp.progress.emitted", endpointMethod);
 		attributes.put("soklet.mcp.keepalives.emitted", none);

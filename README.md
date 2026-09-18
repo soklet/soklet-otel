@@ -165,8 +165,8 @@ with `SOKLET`, it has `soklet.server.type` and `http.route` (including `_unmatch
 An invocation with two observed throwables increments the counter by two. Throwable messages,
 stack traces, and attributes from later throwables are not exported by this counter.
 
-MCP metrics in 2.0.0 map all 23 [`McpMetricsEvent`](https://javadoc.soklet.com/com/soklet/McpMetricsEvent.html) variants to exactly
-21 dedicated `soklet.mcp.*` instruments plus the existing shared transport-failure instrument:
+MCP metrics in 2.0.0 map all 24 [`McpMetricsEvent`](https://javadoc.soklet.com/com/soklet/McpMetricsEvent.html) variants to exactly
+22 dedicated `soklet.mcp.*` instruments plus the existing shared transport-failure instrument:
 
 | Instrument | Kind and unit | Exact attributes |
 | --- | --- | --- |
@@ -183,6 +183,7 @@ MCP metrics in 2.0.0 map all 23 [`McpMetricsEvent`](https://javadoc.soklet.com/c
 | `soklet.mcp.request.stream.duration` | Histogram, `s` | `soklet.mcp.endpoint`, `rpc.method`, `soklet.mcp.stream.termination.reason` |
 | `soklet.mcp.subscriptions.active` | Up-down counter, `{subscription}` | None |
 | `soklet.mcp.subscription.duration` | Histogram, `s` | `soklet.mcp.endpoint`, `soklet.mcp.subscription.termination.reason` |
+| `soklet.mcp.subscription.maintenance` | Counter, `{operation}` | `soklet.mcp.endpoint`, `soklet.mcp.subscription.maintenance.work`, `soklet.mcp.subscription.maintenance.outcome` |
 | `soklet.mcp.cancelations.signaled` | Counter, `{cancelation}` | `soklet.mcp.endpoint`, `rpc.method` |
 | `soklet.mcp.progress.emitted` | Counter, `{notification}` | `soklet.mcp.endpoint`, `rpc.method` |
 | `soklet.mcp.keepalives.emitted` | Counter, `{comment}` | None |
@@ -214,7 +215,12 @@ The fixed enum-backed vocabularies are:
   `internal_error`, `canceled`, `deadline_exceeded`, `client_disconnected`, `write_failed`.
 - Request-stream and subscription termination reason: `completed`, `client_disconnected`, `request_canceled`,
   `deadline_exceeded`, `write_failed`, `backpressure`, `server_stopping`,
-  `simulator_capture_item_limit_exceeded`, `simulator_capture_byte_limit_exceeded`, `internal_error`.
+  `simulator_capture_item_limit_exceeded`, `simulator_capture_byte_limit_exceeded`,
+  `subscription_authorization_denied`, `subscription_authorization_expired`,
+  `subscription_authorization_check_failed`, `subscription_reconciliation_failed`, `internal_error`.
+- Subscription-maintenance work: `authorization`, `catalog_projection`, `reconciliation`.
+- Subscription-maintenance outcome: `succeeded`, `denied`, `timed_out`, `capacity_rejected`, `failed`,
+  `coalesced`, `stale_result_discarded`.
 - MCP transport-failure reason: `request_read_timeout`, `request_too_large`, `malformed_request`, `read_error`,
   `write_error`, `response_write_idle_timeout`, `response_ready_error`, `request_read_timeout_error`,
   `response_write_idle_timeout_error`, `accept_loop_error`, `connection_setup_error`, `task_error`,
@@ -239,6 +245,8 @@ Common attributes:
 - `soklet.mcp.request.outcome`
 - `soklet.mcp.stream.termination.reason`
 - `soklet.mcp.subscription.termination.reason`
+- `soklet.mcp.subscription.maintenance.work`
+- `soklet.mcp.subscription.maintenance.outcome`
 - `rpc.jsonrpc.error_code`
 - `soklet.mcp.shutdown.outcome`
 
