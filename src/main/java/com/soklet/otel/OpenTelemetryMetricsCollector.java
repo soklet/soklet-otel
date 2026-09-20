@@ -879,35 +879,35 @@ public final class OpenTelemetryMetricsCollector implements MetricsCollector {
 	@Override
 	public void didFailToEstablishSseConnection(@NonNull Request request,
 																							@Nullable ResourceMethod resourceMethod,
-																							SseConnection.@NonNull HandshakeFailureReason reason,
+																							SseConnection.@NonNull HandshakeFailureReason connectionHandshakeFailureReason,
 																							@Nullable Throwable throwable) {
 		requireNonNull(request);
-		requireNonNull(reason);
+		requireNonNull(connectionHandshakeFailureReason);
 
 		this.serverSentEventHandshakeFailureCounter.add(1,
 				Attributes.builder()
 						.put(HTTP_METHOD_ATTRIBUTE_KEY, request.getHttpMethod().name())
 						.put(HTTP_ROUTE_ATTRIBUTE_KEY, routeFor(resourceMethod))
-						.put(FAILURE_REASON_ATTRIBUTE_KEY, enumValue(reason))
+						.put(FAILURE_REASON_ATTRIBUTE_KEY, enumValue(connectionHandshakeFailureReason))
 						.build()
 		);
 	}
 
 	@Override
 	public void didTerminateSseConnection(@NonNull SseConnection sseConnection,
-																				@NonNull StreamTermination termination) {
+																				@NonNull StreamTermination streamTermination) {
 		requireNonNull(sseConnection);
-		requireNonNull(termination);
+		requireNonNull(streamTermination);
 
 		Attributes routeAttributes = serverSentEventAttributes(sseConnection);
 		Attributes durationAttributes = Attributes.builder()
 				.putAll(routeAttributes)
-				.put(SSE_TERMINATION_REASON_ATTRIBUTE_KEY, enumValue(termination.getReason()))
+				.put(SSE_TERMINATION_REASON_ATTRIBUTE_KEY, enumValue(streamTermination.getReason()))
 				.build();
 
 		this.activeServerSentEventStreamsCounter.add(-1, routeAttributes);
 		this.serverSentEventStreamsTerminatedCounter.add(1, durationAttributes);
-		this.serverSentEventStreamDurationHistogram.record(seconds(termination.getDuration()), durationAttributes);
+		this.serverSentEventStreamDurationHistogram.record(seconds(streamTermination.getDuration()), durationAttributes);
 	}
 
 	@Override
@@ -1051,29 +1051,29 @@ public final class OpenTelemetryMetricsCollector implements MetricsCollector {
 	}
 
 	@Override
-	public void didBroadcastSseEvent(@NonNull ResourcePathDeclaration route,
+	public void didBroadcastSseEvent(@NonNull ResourcePathDeclaration resourcePathDeclaration,
 																	 @NonNull Integer attempted,
 																	 @NonNull Integer enqueued,
 																	 @NonNull Integer dropped) {
-		requireNonNull(route);
+		requireNonNull(resourcePathDeclaration);
 		requireNonNull(attempted);
 		requireNonNull(enqueued);
 		requireNonNull(dropped);
-		recordBroadcastTotals(route, BROADCAST_PAYLOAD_EVENT, UNKNOWN_COMMENT_TYPE, attempted, enqueued, dropped);
+		recordBroadcastTotals(resourcePathDeclaration, BROADCAST_PAYLOAD_EVENT, UNKNOWN_COMMENT_TYPE, attempted, enqueued, dropped);
 	}
 
 	@Override
-	public void didBroadcastSseComment(@NonNull ResourcePathDeclaration route,
+	public void didBroadcastSseComment(@NonNull ResourcePathDeclaration resourcePathDeclaration,
 																		 SseComment.@NonNull CommentType commentType,
 																		 @NonNull Integer attempted,
 																		 @NonNull Integer enqueued,
 																		 @NonNull Integer dropped) {
-		requireNonNull(route);
+		requireNonNull(resourcePathDeclaration);
 		requireNonNull(commentType);
 		requireNonNull(attempted);
 		requireNonNull(enqueued);
 		requireNonNull(dropped);
-		recordBroadcastTotals(route, BROADCAST_PAYLOAD_COMMENT, enumValue(commentType), attempted, enqueued, dropped);
+		recordBroadcastTotals(resourcePathDeclaration, BROADCAST_PAYLOAD_COMMENT, enumValue(commentType), attempted, enqueued, dropped);
 	}
 
 	@NonNull

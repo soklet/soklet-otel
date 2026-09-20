@@ -195,9 +195,9 @@ public class OpenTelemetryRequestReplacementTests {
 				finished.countDown();
 			}
 			@Override
-			public void didTerminateResponseStream(@NonNull StreamingResponseHandle stream,
-					@NonNull StreamTermination termination) {
-				streamRequest.set(stream.getRequest());
+			public void didTerminateResponseStream(@NonNull StreamingResponseHandle streamingResponseHandle,
+					@NonNull StreamTermination streamTermination) {
+				streamRequest.set(streamingResponseHandle.getRequest());
 				terminalBeforeFinish.set(finished.getCount() == 1);
 				terminated.countDown();
 			}
@@ -289,7 +289,7 @@ public class OpenTelemetryRequestReplacementTests {
 		}
 		@POST("/stream")
 		public MarshaledResponse stream(Request request) {
-			return MarshaledResponse.withStatusCode(200).stream(StreamingResponseBody.fromWriter((output, context) ->
+			return MarshaledResponse.withStatusCode(200).streamingResponseBody(StreamingResponseBody.fromWriter((output, context) ->
 					output.write(String.valueOf(request.getId()).getBytes(StandardCharsets.UTF_8)))).build();
 		}
 	}

@@ -38,7 +38,7 @@ public interface SpanNamingStrategy {
 														 @Nullable ResourceMethod resourceMethod);
 
 	@NonNull
-	String streamingResponseSpanName(@NonNull StreamingResponseHandle stream);
+	String streamingResponseSpanName(@NonNull StreamingResponseHandle streamingResponseHandle);
 
 	@NonNull
 	String sseConnectionSpanName(@NonNull SseConnection connection);

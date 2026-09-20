@@ -774,7 +774,7 @@ public class OpenTelemetryMcpLifecycleObserverTests {
 			@Override
 			@NonNull
 			public String streamingResponseSpanName(
-					@NonNull StreamingResponseHandle stream) {
+					@NonNull StreamingResponseHandle streamingResponseHandle) {
 				return "legacy-stream";
 			}
 
@@ -799,7 +799,7 @@ public class OpenTelemetryMcpLifecycleObserverTests {
 			@Override
 			@NonNull
 			public String streamingResponseSpanName(
-					@NonNull StreamingResponseHandle stream) {
+					@NonNull StreamingResponseHandle streamingResponseHandle) {
 				return "custom-stream";
 			}
 

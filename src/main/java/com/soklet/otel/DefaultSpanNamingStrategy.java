@@ -67,9 +67,9 @@ final class DefaultSpanNamingStrategy implements SpanNamingStrategy {
 
 	@Override
 	@NonNull
-	public String streamingResponseSpanName(@NonNull StreamingResponseHandle stream) {
-		requireNonNull(stream);
-		return "%s stream".formatted(httpRequestSpanName(stream.getRequest(), stream.getResourceMethod().orElse(null)));
+	public String streamingResponseSpanName(@NonNull StreamingResponseHandle streamingResponseHandle) {
+		requireNonNull(streamingResponseHandle);
+		return "%s stream".formatted(httpRequestSpanName(streamingResponseHandle.getRequest(), streamingResponseHandle.getResourceMethod().orElse(null)));
 	}
 
 	@Override

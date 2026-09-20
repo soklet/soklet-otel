@@ -368,24 +368,24 @@ public final class OpenTelemetryLifecycleObserver implements LifecycleObserver, 
 	}
 
 	@Override
-	public void didTerminateResponseStream(@NonNull StreamingResponseHandle streamingResponse,
-																				 @NonNull StreamTermination termination) {
-		requireNonNull(streamingResponse);
-		requireNonNull(termination);
+	public void didTerminateResponseStream(@NonNull StreamingResponseHandle streamingResponseHandle,
+																				 @NonNull StreamTermination streamTermination) {
+		requireNonNull(streamingResponseHandle);
+		requireNonNull(streamTermination);
 
 		if (this.closed.get() || !this.spanPolicy.recordHttpRequestSpans() || !this.spanPolicy.recordStreamingResponseSpans())
 			return;
 
 		safelyRun(() -> {
-			IdentityKey<Request> key = new IdentityKey<>(streamingResponse.getRequest());
+			IdentityKey<Request> key = new IdentityKey<>(streamingResponseHandle.getRequest());
 			SpanState spanState = this.httpRequestSpans.get(key);
-			Instant finishedAt = streamingResponse.getEstablishedAt().plus(termination.getDuration());
+			Instant finishedAt = streamingResponseHandle.getEstablishedAt().plus(streamTermination.getDuration());
 			if (spanState == null) {
-				SpanState backfilled = backfilledStreamingSpan(streamingResponse);
+				SpanState backfilled = backfilledStreamingSpan(streamingResponseHandle);
 				try {
-					applyHttpFinish(backfilled.span(), streamingResponse.getResourceMethod().orElse(null),
-							streamingResponse.getMarshaledResponse(), List.of());
-					applyStreamTermination(backfilled.span(), termination);
+					applyHttpFinish(backfilled.span(), streamingResponseHandle.getResourceMethod().orElse(null),
+							streamingResponseHandle.getMarshaledResponse(), List.of());
+					applyStreamTermination(backfilled.span(), streamTermination);
 				} finally {
 					endSpanSafely(backfilled.span(), finishedAt);
 				}
@@ -396,10 +396,10 @@ public final class OpenTelemetryLifecycleObserver implements LifecycleObserver, 
 					return;
 				// Transport completion can precede the synchronous handling-finish callback.
 				// Preserve both observations; do not end before HTTP status/throwables arrive.
-				spanState.pendingHttpStreamTermination = termination;
+				spanState.pendingHttpStreamTermination = streamTermination;
 				spanState.httpStreamFinishedAt = finishedAt;
 				if (spanState.httpHandlingFinished)
-					finishHttpStream(key, spanState, termination, finishedAt);
+					finishHttpStream(key, spanState, streamTermination, finishedAt);
 			}
 		});
 	}
@@ -537,9 +537,9 @@ public final class OpenTelemetryLifecycleObserver implements LifecycleObserver, 
 
 	@Override
 	public void didTerminateSseConnection(@NonNull SseConnection sseConnection,
-																				@NonNull StreamTermination termination) {
+																				@NonNull StreamTermination streamTermination) {
 		requireNonNull(sseConnection);
-		requireNonNull(termination);
+		requireNonNull(streamTermination);
 
 		if (this.closed.get() || !this.spanPolicy.recordSseConnectionSpans())
 			return;
@@ -551,9 +551,9 @@ public final class OpenTelemetryLifecycleObserver implements LifecycleObserver, 
 				return;
 
 			try {
-				applyStreamTermination(spanState.span(), termination);
+				applyStreamTermination(spanState.span(), streamTermination);
 			} finally {
-				endSpanSafely(spanState.span(), sseConnection.getEstablishedAt().plus(termination.getDuration()));
+				endSpanSafely(spanState.span(), sseConnection.getEstablishedAt().plus(streamTermination.getDuration()));
 			}
 		});
 	}

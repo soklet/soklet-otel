@@ -70,6 +70,28 @@ import static java.util.Objects.requireNonNull;
  * @author <a href="https://www.revetkn.com">Mark Allen</a>
  */
 public class OpenTelemetryLifecycleObserverTests {
+	@Test
+	public void callbackParameterNamesMatchTheCoreNamingContract() throws Exception {
+		for (Class<?> owner : List.of(SpanNamingStrategy.class, DefaultSpanNamingStrategy.class,
+				OpenTelemetryLifecycleObserver.class, OpenTelemetryMetricsCollector.class)) {
+			for (Method method : owner.getDeclaredMethods()) {
+				if (!Set.of("streamingResponseSpanName", "didTerminateResponseStream", "didTerminateSseConnection",
+						"didFailToEstablishSseConnection", "didBroadcastSseEvent", "didBroadcastSseComment").contains(method.getName()))
+					continue;
+				for (java.lang.reflect.Parameter parameter : method.getParameters()) {
+					String expected = parameter.getType() == StreamingResponseHandle.class ? "streamingResponseHandle"
+							: parameter.getType() == StreamTermination.class ? "streamTermination"
+							: parameter.getType() == ResourcePathDeclaration.class ? "resourcePathDeclaration"
+							: parameter.getType() == SseConnection.HandshakeFailureReason.class ? "connectionHandshakeFailureReason" : null;
+					if (expected != null) {
+						Assertions.assertTrue(parameter.isNamePresent(), method.toString());
+						Assertions.assertEquals(expected, parameter.getName(), method.toString());
+					}
+				}
+			}
+		}
+	}
+
 	private static final String TRACEPARENT = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01";
 	private static final AttributeKey<String> SERVER_TYPE_ATTRIBUTE_KEY = AttributeKey.stringKey("soklet.server.type");
 	private static final AttributeKey<String> HTTP_METHOD_ATTRIBUTE_KEY = AttributeKey.stringKey("http.request.method");
@@ -235,7 +257,7 @@ public class OpenTelemetryLifecycleObserverTests {
 		ResourceMethod resourceMethod = createResourceMethod(HttpMethod.GET, "/download", "download");
 		MarshaledResponse response = MarshaledResponse.fromStatusCode(200)
 				.copy()
-				.stream(StreamingResponseBody.fromWriter((output, context) -> output.write(new byte[]{1, 2, 3})))
+				.streamingResponseBody(StreamingResponseBody.fromWriter((output, context) -> output.write(new byte[]{1, 2, 3})))
 				.finish();
 
 		observer.didStartRequestHandling(ServerType.HTTP, request, resourceMethod);
@@ -265,7 +287,7 @@ public class OpenTelemetryLifecycleObserverTests {
 		ResourceMethod resourceMethod = createResourceMethod(HttpMethod.GET, "/download", "download");
 		MarshaledResponse response = MarshaledResponse.fromStatusCode(200)
 				.copy()
-				.stream(StreamingResponseBody.fromWriter((output, context) -> output.write(new byte[]{1, 2, 3})))
+				.streamingResponseBody(StreamingResponseBody.fromWriter((output, context) -> output.write(new byte[]{1, 2, 3})))
 				.finish();
 		TestStreamingResponseHandle stream = new TestStreamingResponseHandle(request, resourceMethod, response, Instant.now());
 
@@ -289,7 +311,7 @@ public class OpenTelemetryLifecycleObserverTests {
 		ResourceMethod resourceMethod = createResourceMethod(HttpMethod.GET, "/download", "download");
 		MarshaledResponse response = MarshaledResponse.fromStatusCode(200)
 				.copy()
-				.stream(StreamingResponseBody.fromWriter((output, context) -> output.write(new byte[]{1, 2, 3})))
+				.streamingResponseBody(StreamingResponseBody.fromWriter((output, context) -> output.write(new byte[]{1, 2, 3})))
 				.finish();
 		TestStreamingResponseHandle stream = new TestStreamingResponseHandle(request, resourceMethod, response, Instant.now());
 
@@ -493,7 +515,7 @@ public class OpenTelemetryLifecycleObserverTests {
 				Request request = Request.fromPath(HttpMethod.GET, "/stream");
 				ResourceMethod resourceMethod = createResourceMethod(HttpMethod.GET, "/stream", "download");
 				MarshaledResponse response = MarshaledResponse.withStatusCode(200)
-						.stream(StreamingResponseBody.fromWriter((output, context) -> {})).build();
+						.streamingResponseBody(StreamingResponseBody.fromWriter((output, context) -> {})).build();
 				observer.didStartRequestHandling(ServerType.HTTP, request, null);
 				observer.didFinishRequestHandling(ServerType.HTTP, request, null, response, Duration.ZERO, List.of());
 				observer.didTerminateResponseStream(new TestStreamingResponseHandle(request, resourceMethod, response, Instant.now()),
@@ -541,7 +563,7 @@ public class OpenTelemetryLifecycleObserverTests {
 			Request request = Request.fromPath(HttpMethod.GET, "/stream");
 			ResourceMethod method = createResourceMethod(HttpMethod.GET, "/stream", "download");
 			MarshaledResponse response = MarshaledResponse.withStatusCode(200)
-					.stream(StreamingResponseBody.fromWriter((output, context) -> {})).build();
+					.streamingResponseBody(StreamingResponseBody.fromWriter((output, context) -> {})).build();
 			observer.didStartRequestHandling(ServerType.HTTP, request, method);
 			observer.didTerminateResponseStream(new TestStreamingResponseHandle(request, method, response, Instant.now()),
 					StreamTermination.with(StreamTerminationReason.COMPLETED, Duration.ZERO).build());
