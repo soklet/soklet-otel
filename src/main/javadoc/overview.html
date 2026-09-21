@@ -194,9 +194,10 @@
       The default name is <code>MCP &lt;method&gt;</code>. Both it and <code>rpc.method</code> accept the exact bounded
       live vocabulary <code>server/discover</code>, <code>tools/list</code>, <code>tools/call</code>,
       <code>prompts/list</code>, <code>prompts/get</code>, <code>resources/list</code>,
-      <code>resources/templates/list</code>, <code>resources/read</code>,
+      <code>resources/templates/list</code>, <code>resources/read</code>, <code>completion/complete</code>,
       <code>subscriptions/listen</code>, <code>notifications/cancelled</code>, <code>tasks/get</code>,
-      <code>tasks/update</code>, and <code>tasks/cancel</code>; every other value becomes
+      <code>tasks/update</code>, <code>tasks/cancel</code>, <code>skills/list</code>, and
+      <code>skills/get</code>; every other value becomes
       <code>&lt;unrecognized&gt;</code>, and no <code>rpc.method_original</code> is emitted. A custom naming strategy
       receives the full context, so the application owns custom-name confidentiality and cardinality.
     </p>
