@@ -257,7 +257,7 @@ public class OpenTelemetryLifecycleObserverTests {
 		ResourceMethod resourceMethod = createResourceMethod(HttpMethod.GET, "/download", "download");
 		MarshaledResponse response = MarshaledResponse.fromStatusCode(200)
 				.copy()
-				.streamingResponseBody(StreamingResponseBody.fromWriter((output, context) -> output.write(new byte[]{1, 2, 3})))
+				.streamingResponseBody(StreamingResponseBody.fromWriter(responseStream -> responseStream.write(new byte[]{1, 2, 3})))
 				.finish();
 
 		observer.didStartRequestHandling(ServerType.HTTP, request, resourceMethod);
@@ -287,7 +287,7 @@ public class OpenTelemetryLifecycleObserverTests {
 		ResourceMethod resourceMethod = createResourceMethod(HttpMethod.GET, "/download", "download");
 		MarshaledResponse response = MarshaledResponse.fromStatusCode(200)
 				.copy()
-				.streamingResponseBody(StreamingResponseBody.fromWriter((output, context) -> output.write(new byte[]{1, 2, 3})))
+				.streamingResponseBody(StreamingResponseBody.fromWriter(responseStream -> responseStream.write(new byte[]{1, 2, 3})))
 				.finish();
 		TestStreamingResponseHandle stream = new TestStreamingResponseHandle(request, resourceMethod, response, Instant.now());
 
@@ -311,7 +311,7 @@ public class OpenTelemetryLifecycleObserverTests {
 		ResourceMethod resourceMethod = createResourceMethod(HttpMethod.GET, "/download", "download");
 		MarshaledResponse response = MarshaledResponse.fromStatusCode(200)
 				.copy()
-				.streamingResponseBody(StreamingResponseBody.fromWriter((output, context) -> output.write(new byte[]{1, 2, 3})))
+				.streamingResponseBody(StreamingResponseBody.fromWriter(responseStream -> responseStream.write(new byte[]{1, 2, 3})))
 				.finish();
 		TestStreamingResponseHandle stream = new TestStreamingResponseHandle(request, resourceMethod, response, Instant.now());
 
@@ -506,7 +506,7 @@ public class OpenTelemetryLifecycleObserverTests {
 	@Test
 	public void throwableFreeStreamFailuresHaveBoundedErrorTypes() throws Exception {
 		for (StreamTerminationReason reason : List.of(StreamTerminationReason.RESPONSE_TIMEOUT,
-				StreamTerminationReason.RESPONSE_IDLE_TIMEOUT, StreamTerminationReason.BACKPRESSURE,
+				StreamTerminationReason.RESPONSE_IDLE_TIMEOUT, StreamTerminationReason.CLEANUP_TIMEOUT, StreamTerminationReason.BACKPRESSURE,
 				StreamTerminationReason.WRITE_FAILED, StreamTerminationReason.PRODUCER_FAILED,
 				StreamTerminationReason.INTERNAL_ERROR)) {
 			TestHarness harness = TestHarness.create();
@@ -515,7 +515,7 @@ public class OpenTelemetryLifecycleObserverTests {
 				Request request = Request.fromPath(HttpMethod.GET, "/stream");
 				ResourceMethod resourceMethod = createResourceMethod(HttpMethod.GET, "/stream", "download");
 				MarshaledResponse response = MarshaledResponse.withStatusCode(200)
-						.streamingResponseBody(StreamingResponseBody.fromWriter((output, context) -> {})).build();
+						.streamingResponseBody(StreamingResponseBody.fromWriter(responseStream -> {})).build();
 				observer.didStartRequestHandling(ServerType.HTTP, request, null);
 				observer.didFinishRequestHandling(ServerType.HTTP, request, null, response, Duration.ZERO, List.of());
 				observer.didTerminateResponseStream(new TestStreamingResponseHandle(request, resourceMethod, response, Instant.now()),
@@ -563,7 +563,7 @@ public class OpenTelemetryLifecycleObserverTests {
 			Request request = Request.fromPath(HttpMethod.GET, "/stream");
 			ResourceMethod method = createResourceMethod(HttpMethod.GET, "/stream", "download");
 			MarshaledResponse response = MarshaledResponse.withStatusCode(200)
-					.streamingResponseBody(StreamingResponseBody.fromWriter((output, context) -> {})).build();
+					.streamingResponseBody(StreamingResponseBody.fromWriter(responseStream -> {})).build();
 			observer.didStartRequestHandling(ServerType.HTTP, request, method);
 			observer.didTerminateResponseStream(new TestStreamingResponseHandle(request, method, response, Instant.now()),
 					StreamTermination.with(StreamTerminationReason.COMPLETED, Duration.ZERO).build());

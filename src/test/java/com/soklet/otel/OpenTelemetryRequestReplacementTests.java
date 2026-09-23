@@ -289,8 +289,8 @@ public class OpenTelemetryRequestReplacementTests {
 		}
 		@POST("/stream")
 		public MarshaledResponse stream(Request request) {
-			return MarshaledResponse.withStatusCode(200).streamingResponseBody(StreamingResponseBody.fromWriter((output, context) ->
-					output.write(String.valueOf(request.getId()).getBytes(StandardCharsets.UTF_8)))).build();
+			return MarshaledResponse.withStatusCode(200).streamingResponseBody(StreamingResponseBody.fromWriter(responseStream ->
+					responseStream.write(String.valueOf(request.getId()).getBytes(StandardCharsets.UTF_8)))).build();
 		}
 	}
 }
