@@ -504,6 +504,28 @@ public class OpenTelemetryLifecycleObserverTests {
 	}
 
 	@Test
+	public void explicitClientCancellationTerminatesWithoutRecordingAnError() throws Exception {
+		TestHarness harness = TestHarness.create();
+		try (OpenTelemetryLifecycleObserver observer = OpenTelemetryLifecycleObserver
+				.withOpenTelemetry(harness.openTelemetrySdk()).build()) {
+			Request request = Request.fromPath(HttpMethod.GET, "/stream");
+			ResourceMethod resourceMethod = createResourceMethod(HttpMethod.GET, "/stream", "download");
+			MarshaledResponse response = MarshaledResponse.withStatusCode(200)
+					.streamingResponseBody(StreamingResponseBody.fromWriter(responseStream -> {})).build();
+			observer.didStartRequestHandling(ServerType.HTTP, request, null);
+			observer.didFinishRequestHandling(ServerType.HTTP, request, null, response, Duration.ZERO, List.of());
+			observer.didTerminateResponseStream(new TestStreamingResponseHandle(request, resourceMethod, response, Instant.now()),
+					StreamTermination.with(StreamTerminationReason.CLIENT_CANCELED, Duration.ZERO).build());
+			SpanData span = onlySpan(harness);
+			Assertions.assertNotEquals(StatusCode.ERROR, span.getStatus().getStatusCode());
+			Assertions.assertNull(span.getAttributes().get(ERROR_TYPE_ATTRIBUTE_KEY));
+			Assertions.assertEquals(0, observer.getActiveSpanCount());
+		} finally {
+			harness.openTelemetrySdk().close();
+		}
+	}
+
+	@Test
 	public void throwableFreeStreamFailuresHaveBoundedErrorTypes() throws Exception {
 		for (StreamTerminationReason reason : List.of(StreamTerminationReason.RESPONSE_TIMEOUT,
 				StreamTerminationReason.RESPONSE_IDLE_TIMEOUT, StreamTerminationReason.CLEANUP_TIMEOUT, StreamTerminationReason.BACKPRESSURE,

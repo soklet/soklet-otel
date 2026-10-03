@@ -23,6 +23,7 @@ import com.soklet.McpImplementation;
 import com.soklet.McpInputResponses;
 import com.soklet.McpJsonObject;
 import com.soklet.McpJsonRpcError;
+import com.soklet.McpProtocolVersion;
 import com.soklet.McpRequestContext;
 import com.soklet.McpRequestId;
 import com.soklet.McpRequestOutcome;
@@ -95,7 +96,8 @@ public class OpenTelemetryMcpLifecycleObserverTests {
 			"tasks/get", "tasks/update", "tasks/cancel", "skills/list", "skills/get");
 	private static final McpEndpoint ENDPOINT = McpEndpoint.withPath(
 			ENDPOINT_PATH, McpImplementation.withNameAndVersion(
-					"otel-mcp-tests", "2.0.0").build())
+					"otel-mcp-tests", "2.0.0").build(),
+			Set.of(McpProtocolVersion.V2026_07_28))
 			.build();
 
 	private static final AttributeKey<String> SERVER_TYPE_ATTRIBUTE_KEY =
