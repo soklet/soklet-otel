@@ -192,8 +192,8 @@ public class OpenTelemetryLifecycleObserverTests {
 				.build();
 		Request request = Request.withPath(HttpMethod.GET, "/widgets/123")
 				.headers(Map.of(
-						"traceparent", Set.of(TRACEPARENT),
-						"tracestate", Set.of("rojo=00f067aa0ba902b7,congo=t61rcWkgMzE")))
+						"traceparent", List.of(TRACEPARENT),
+						"tracestate", List.of("rojo=00f067aa0ba902b7,congo=t61rcWkgMzE")))
 				.build();
 		ResourceMethod resourceMethod = createResourceMethod(HttpMethod.GET, "/widgets/{id}", "widget");
 
@@ -629,7 +629,7 @@ public class OpenTelemetryLifecycleObserverTests {
 																			 @NonNull String path,
 																			 @NonNull String traceparent) {
 		return Request.withPath(httpMethod, path)
-				.headers(Map.of("traceparent", Set.of(traceparent)))
+				.headers(Map.of("traceparent", List.of(traceparent)))
 				.build();
 	}
 

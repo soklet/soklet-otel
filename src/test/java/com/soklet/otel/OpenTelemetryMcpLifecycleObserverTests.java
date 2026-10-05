@@ -601,9 +601,9 @@ public class OpenTelemetryMcpLifecycleObserverTests {
 		Request physicalRequest = Request.withPath(HttpMethod.POST, ENDPOINT_PATH)
 				.id(physicalRequestId)
 				.headers(Map.of(
-						"traceparent", Set.of(HTTP_TRACEPARENT),
-						"tracestate", Set.of("httpvendor=http-tracestate-canary"),
-						"authorization", Set.of("http-authorization-canary")))
+						"traceparent", List.of(HTTP_TRACEPARENT),
+						"tracestate", List.of("httpvendor=http-tracestate-canary"),
+						"authorization", List.of("http-authorization-canary")))
 				.build();
 		ContextFixture fixture = context(RECOGNIZED_METHOD, physicalRequest,
 				Optional.empty());
@@ -752,7 +752,7 @@ public class OpenTelemetryMcpLifecycleObserverTests {
 		Request.PathBuilder builder = Request.withPath(HttpMethod.POST, ENDPOINT_PATH)
 				.id(requestId);
 		if (traceparent != null)
-			builder.headers(Map.of("traceparent", Set.of(traceparent)));
+			builder.headers(Map.of("traceparent", List.of(traceparent)));
 		return builder.build();
 	}
 

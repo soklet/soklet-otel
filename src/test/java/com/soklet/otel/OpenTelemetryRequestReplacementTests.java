@@ -238,7 +238,7 @@ public class OpenTelemetryRequestReplacementTests {
 
 	private static Request original() {
 		return Request.withPath(HttpMethod.GET, "/original").id("shared-id")
-				.headers(Map.of("traceparent", Set.of(TRACEPARENT))).build();
+				.headers(Map.of("traceparent", List.of(TRACEPARENT))).build();
 	}
 
 	private static RequestInterceptor replacingInterceptor(boolean changeId, String route,
