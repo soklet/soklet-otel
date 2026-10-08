@@ -137,7 +137,8 @@
         <code>canceled</code>, <code>deadline_exceeded</code>, <code>client_disconnected</code>,
         <code>write_failed</code>.</li>
       <li>Request stream and subscription: <code>completed</code>, <code>client_disconnected</code>,
-        <code>request_canceled</code>, <code>deadline_exceeded</code>, <code>write_failed</code>,
+        <code>request_canceled</code>, <code>session_expired</code>, <code>session_closed</code>,
+        <code>deadline_exceeded</code>, <code>write_failed</code>,
         <code>backpressure</code>, <code>server_stopping</code>,
         <code>simulator_capture_item_limit_exceeded</code>, <code>simulator_capture_byte_limit_exceeded</code>,
         <code>subscription_authorization_denied</code>, <code>subscription_authorization_expired</code>,
@@ -156,6 +157,14 @@
         <code>timeout_task_error</code>, <code>selection_key_error</code>, <code>register_error</code>,
         <code>write_timeout</code>, <code>event_loop_terminated</code>, <code>unknown</code>.</li>
     </ul>
+    <p>
+      <code>session_expired</code> and <code>session_closed</code> describe 2025 MCP session expiry
+      and closure, including verified DELETE retirement. These values appear on the existing
+      request-stream and subscription duration instruments; there are no separate session-count
+      or session-lifetime instruments, and session IDs are not metric attributes. Native HTTP
+      stream termination counts use uppercase <code>StreamTerminationReason</code> names
+      under <code>soklet.http.response.stream.termination.reason</code>.
+    </p>
     <p>
       Framework-produced dimensions are bounded to registered endpoint paths, recognized methods or
       <code>&lt;unrecognized&gt;</code>, fixed lower-snake enum values, and protocol-error codes

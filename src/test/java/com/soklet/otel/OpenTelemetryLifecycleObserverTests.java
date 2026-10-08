@@ -17,14 +17,20 @@
 package com.soklet.otel;
 
 import com.soklet.HttpMethod;
+import com.soklet.HttpServer;
+import com.soklet.LifecyclePolicy;
 import com.soklet.MarshaledResponse;
 import com.soklet.McpJsonRpcError;
 import com.soklet.McpRequestContext;
 import com.soklet.McpRequestOutcome;
 import com.soklet.Request;
+import com.soklet.RequestInterceptor;
 import com.soklet.ResourceMethod;
+import com.soklet.ResourceMethodResolver;
 import com.soklet.ResourcePathDeclaration;
 import com.soklet.ServerType;
+import com.soklet.Soklet;
+import com.soklet.SokletConfig;
 import com.soklet.SseConnection;
 import com.soklet.SseEvent;
 import com.soklet.StreamTermination;
@@ -48,6 +54,8 @@ import org.junit.jupiter.api.Test;
 import java.lang.reflect.Method;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
+import java.net.ServerSocket;
+import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
@@ -61,6 +69,10 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.SynchronousQueue;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.function.Consumer;
+import java.util.function.Function;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
@@ -70,6 +82,106 @@ import static java.util.Objects.requireNonNull;
  * @author <a href="https://www.revetkn.com">Mark Allen</a>
  */
 public class OpenTelemetryLifecycleObserverTests {
+	@Test
+	public void rejectedUnroutedHttpStreamExportsOne503SpanAndLeavesNoActiveSpans() throws Exception {
+		TestHarness harness = TestHarness.create();
+		CountDownLatch heldProducerEntered = new CountDownLatch(1);
+		CountDownLatch releaseHeldProducer = new CountDownLatch(1);
+		int port;
+		try (ServerSocket reservation = new ServerSocket(0)) { port = reservation.getLocalPort(); }
+		try (OpenTelemetryLifecycleObserver observer = OpenTelemetryLifecycleObserver
+				.withOpenTelemetry(harness.openTelemetrySdk()).build()) {
+			HttpServer server = HttpServer.withPort(port).host("127.0.0.1").concurrency(1)
+					.streamingResponseTimeout(Duration.ZERO).streamingResponseIdleTimeout(Duration.ZERO)
+					.streamingExecutorServiceSupplier(() -> new ThreadPoolExecutor(1, 1, 0L, TimeUnit.MILLISECONDS,
+							new SynchronousQueue<>(), new ThreadPoolExecutor.AbortPolicy())).build();
+			Soklet soklet = Soklet.fromConfig(SokletConfig.withHttpServer(server)
+					.resourceMethodResolver(ResourceMethodResolver.fromClasses(Set.of(RejectionHealthResource.class)))
+					.requestInterceptor(new RequestInterceptor() {
+						@Override
+						public void interceptRequest(ServerType serverType, Request request, ResourceMethod resourceMethod,
+								Function<Request, MarshaledResponse> responseGenerator, Consumer<MarshaledResponse> responseWriter) {
+							Assertions.assertNull(resourceMethod);
+							responseWriter.accept(MarshaledResponse.withStatusCode(200)
+									.streamingResponseBody(StreamingResponseBody.fromWriter(responseStream -> {
+										Assertions.assertEquals("/held", request.getPath(), "Rejected producer entered");
+										heldProducerEntered.countDown(); releaseHeldProducer.await();
+									})).build());
+						}
+					}).lifecycleObserver(observer).lifecyclePolicy(LifecyclePolicy.builder()
+							.gracefulShutdownTimeout(Duration.ofSeconds(1)).forcedShutdownTimeout(Duration.ofSeconds(1)).build()).build());
+			try {
+				soklet.start();
+				try (Socket held = openStreamRequest(port, "/held")) {
+					Assertions.assertTrue(heldProducerEntered.await(3, TimeUnit.SECONDS));
+					try (Socket rejected = openStreamRequest(port, "/rejected")) {
+						String wire = new String(rejected.getInputStream().readAllBytes(), StandardCharsets.ISO_8859_1);
+						Assertions.assertTrue(wire.startsWith("HTTP/1.1 503"), wire);
+					}
+					awaitSpanCount(observer, 1);
+					SpanData rejection = onlySpan(harness);
+					Assertions.assertEquals(503L, rejection.getAttributes().get(STATUS_CODE_ATTRIBUTE_KEY));
+					// A precommit rejection has no body-delivery lifetime. Its finite
+					// status is exported even if termination observation arrives later.
+					releaseHeldProducer.countDown();
+					String wire = new String(held.getInputStream().readAllBytes(), StandardCharsets.ISO_8859_1);
+					Assertions.assertTrue(wire.startsWith("HTTP/1.1 200"), wire);
+				}
+				awaitSpanCount(observer, 0);
+			} finally {
+				releaseHeldProducer.countDown(); soklet.close();
+			}
+			Assertions.assertEquals(0, observer.getActiveSpanCount());
+			Assertions.assertEquals(2, harness.spanExporter().getFinishedSpanItems().size(), "Duplicate or missing stream span");
+		} finally { harness.openTelemetrySdk().close(); }
+	}
+
+	public static final class RejectionHealthResource {
+		@com.soklet.annotation.GET("/health")
+		public String health() { return "ok"; }
+	}
+
+	private static Socket openStreamRequest(int port, String path) throws Exception {
+		Socket socket = new Socket();
+		try {
+			socket.connect(new InetSocketAddress("127.0.0.1", port), 3_000);
+			socket.setSoTimeout(3_000);
+			socket.getOutputStream().write(("GET " + path + " HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+					.getBytes(StandardCharsets.ISO_8859_1));
+			return socket;
+		} catch (Exception exception) { socket.close(); throw exception; }
+	}
+
+	private static void awaitSpanCount(OpenTelemetryLifecycleObserver observer, int expected) throws Exception {
+		long until = System.nanoTime() + TimeUnit.SECONDS.toNanos(3);
+		while (observer.getActiveSpanCount() != expected && System.nanoTime() - until < 0L) Thread.sleep(5L);
+		Assertions.assertEquals(expected, observer.getActiveSpanCount());
+	}
+
+	@Test
+	public void latePrecommitTerminationCannotBackfillAnotherSpanOrConfuseEqualRequestValues() throws Exception {
+		TestHarness harness = TestHarness.create();
+		try (OpenTelemetryLifecycleObserver observer = OpenTelemetryLifecycleObserver
+				.withOpenTelemetry(harness.openTelemetrySdk()).build()) {
+			Request request = Request.fromPath(HttpMethod.GET, "/unrouted");
+			MarshaledResponse original = MarshaledResponse.withStatusCode(200)
+					.streamingResponseBody(StreamingResponseBody.fromWriter(stream -> {})).build();
+			observer.didStartRequestHandling(ServerType.HTTP, request, null);
+			observer.willWriteResponse(ServerType.HTTP, request, null, original);
+			observer.didFinishRequestHandling(ServerType.HTTP, request, null, MarshaledResponse.fromStatusCode(503),
+					Duration.ZERO, List.of());
+			observer.didTerminateResponseStream(new TestStreamingResponseHandle(request, null, original, Instant.now()),
+					StreamTermination.with(StreamTerminationReason.BACKPRESSURE, Duration.ZERO).build());
+			Assertions.assertEquals(503L, onlySpan(harness).getAttributes().get(STATUS_CODE_ATTRIBUTE_KEY));
+			Assertions.assertEquals(0, observer.getActiveSpanCount());
+			Request equalRequest = request.copy().finish();
+			Assertions.assertEquals(request, equalRequest); Assertions.assertNotSame(request, equalRequest);
+			observer.didTerminateResponseStream(new TestStreamingResponseHandle(equalRequest, null, original, Instant.now()),
+					StreamTermination.with(StreamTerminationReason.COMPLETED, Duration.ZERO).build());
+			Assertions.assertEquals(2, harness.spanExporter().getFinishedSpanItems().size());
+		} finally { harness.openTelemetrySdk().close(); }
+	}
+
 	@Test
 	public void callbackParameterNamesMatchTheCoreNamingContract() throws Exception {
 		for (Class<?> owner : List.of(SpanNamingStrategy.class, DefaultSpanNamingStrategy.class,
@@ -687,13 +799,12 @@ public class OpenTelemetryLifecycleObserverTests {
 
 	private record TestStreamingResponseHandle(
 			@NonNull Request request,
-			@NonNull ResourceMethod resourceMethod,
+			@org.jspecify.annotations.Nullable ResourceMethod resourceMethod,
 			@NonNull MarshaledResponse marshaledResponse,
 			@NonNull Instant establishedAt
 	) implements StreamingResponseHandle {
 		private TestStreamingResponseHandle {
 			requireNonNull(request);
-			requireNonNull(resourceMethod);
 			requireNonNull(marshaledResponse);
 			requireNonNull(establishedAt);
 		}
@@ -713,7 +824,7 @@ public class OpenTelemetryLifecycleObserverTests {
 		@Override
 		@NonNull
 		public Optional<ResourceMethod> getResourceMethod() {
-			return Optional.of(this.resourceMethod);
+			return Optional.ofNullable(this.resourceMethod);
 		}
 
 		@Override

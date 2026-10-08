@@ -31,6 +31,7 @@ import com.soklet.SseComment;
 import com.soklet.SseConnection;
 import com.soklet.SseEvent;
 import com.soklet.StreamTermination;
+import com.soklet.StreamingResponseHandle;
 import io.opentelemetry.api.GlobalOpenTelemetry;
 import io.opentelemetry.api.OpenTelemetry;
 import io.opentelemetry.api.common.AttributeKey;
@@ -49,6 +50,9 @@ import javax.annotation.concurrent.ThreadSafe;
 import java.net.InetSocketAddress;
 import java.time.Duration;
 import java.util.List;
+import java.util.Map;
+import java.util.IdentityHashMap;
+import java.util.Collections;
 import java.util.Locale;
 
 import static java.util.Objects.requireNonNull;
@@ -65,8 +69,13 @@ import static java.util.Objects.requireNonNull;
  * transferred, while the {@link MetricNamingStrategy#SOKLET} strategy records the handler-visible body size.
  * If an oversized request is rejected before its complete encoded payload size is known, the
  * semantic-convention body-size sample is omitted instead of recording an inaccurate zero.
- * Response-body size is based on the finalized {@link MarshaledResponse}; if the HTTP transport applies
+ * Finite response-body size is based on the finalized {@link MarshaledResponse}; if the HTTP transport applies
  * dynamic gzip afterward, that metric remains the pre-compression size.
+ * For admitted streaming HTTP responses, active requests remain counted through transport termination.
+ * The existing duration/body-size instruments use the supplied monotonic full request lifetime and observed
+ * payload bytes; response-write duration still describes handoff. The separate
+ * {@code soklet.http.response.stream.terminations} counter uses configured routes, status classes and uppercase
+ * terminal reasons. Only active admitted stream state is retained, by dispatch request identity.
  * The {@code soklet.server.type} attribute uses the same explicit {@code http}, {@code sse}, and
  * {@code mcp} vocabulary as spans. In 2.0.0, HTTP metric values change from {@code standard_http}
  * to {@code http}, including connection, acceptance, read-failure, and transport-failure metrics
@@ -85,6 +94,14 @@ import static java.util.Objects.requireNonNull;
  * {@code not_started}, {@code graceful_termination}, {@code forced_termination},
  * {@code unexpected_termination}, {@code residual_activity}, and
  * {@code termination_unknown}.
+ * <p>
+ * MCP request-stream and subscription duration instruments use lower-snake names from
+ * {@link com.soklet.McpStreamTerminationReason}, including {@code session_expired} and
+ * {@code session_closed} for 2025 session expiry and closure. They use the attributes
+ * {@code soklet.mcp.stream.termination.reason} and {@code soklet.mcp.subscription.termination.reason},
+ * respectively. There are no separate session-count or session-lifetime instruments, and session IDs
+ * are not metric attributes. Native HTTP stream termination counts use uppercase
+ * {@link com.soklet.StreamTerminationReason} names.
  * <p>
  * See <a href="https://soklet.com/docs/metrics-collection">https://soklet.com/docs/metrics-collection</a> for Soklet's metrics/telemetry documentation.
  *
@@ -209,6 +226,8 @@ public final class OpenTelemetryMetricsCollector implements MetricsCollector {
 	private final LongCounter transportFailureCounter;
 	@NonNull
 	private final LongUpDownCounter activeRequestsCounter;
+	private final LongCounter responseStreamTerminationsCounter;
+	private final Map<Request, Attributes> responseStreamsInFlight = Collections.synchronizedMap(new IdentityHashMap<>());
 	@NonNull
 	private final DoubleHistogram requestDurationHistogram;
 	@NonNull
@@ -414,6 +433,9 @@ public final class OpenTelemetryMetricsCollector implements MetricsCollector {
 				.setDescription("Number of in-flight requests currently being handled.")
 				.setUnit("{request}")
 				.build();
+		this.responseStreamTerminationsCounter = meter.counterBuilder("soklet.http.response.stream.terminations")
+				.setDescription("Total admitted HTTP response stream terminations.")
+				.setUnit("{stream}").build();
 		this.requestDurationHistogram = meter.histogramBuilder(requestDurationMetricName)
 				.setDescription("Total request handling duration.")
 				.setUnit("s")
@@ -816,8 +838,12 @@ public final class OpenTelemetryMetricsCollector implements MetricsCollector {
 		Throwable throwable = throwables.isEmpty() ? null : throwables.get(0);
 		Attributes attributes = requestAttributes(serverType, request, resourceMethod, marshaledResponse.getStatusCode(), throwable);
 
-		this.activeRequestsCounter.add(-1, activeRequestAttributes(serverType, request));
-		this.requestDurationHistogram.record(seconds(duration), attributes);
+		boolean streaming = serverType == ServerType.HTTP && marshaledResponse.isStreaming();
+		if (streaming) this.responseStreamsInFlight.put(request, attributes);
+		else {
+			this.activeRequestsCounter.add(-1, activeRequestAttributes(serverType, request));
+			this.requestDurationHistogram.record(seconds(duration), attributes);
+		}
 		long requestBodySizeInBytes = this.metricNamingStrategy == MetricNamingStrategy.SEMCONV
 				? request.getEncodedBodySizeInBytes().longValue()
 				: request.getBody().map(body -> (long) body.length).orElse(0L);
@@ -826,10 +852,37 @@ public final class OpenTelemetryMetricsCollector implements MetricsCollector {
 				|| !request.isContentTooLarge()
 				|| requestBodySizeInBytes > 0)
 			this.requestBodySizeHistogram.record(requestBodySizeInBytes, attributes);
-		this.responseBodySizeHistogram.record(marshaledResponse.getBodyLength(), attributes);
+		if (!streaming) this.responseBodySizeHistogram.record(marshaledResponse.getBodyLength(), attributes);
 
 		if (!throwables.isEmpty())
 			this.requestThrowableCounter.add(throwables.size(), attributes);
+	}
+
+	@Override
+	public void didTerminateResponseStream(@NonNull StreamingResponseHandle streamingResponseHandle,
+			@NonNull StreamTermination streamTermination, @NonNull Duration requestDuration,
+			@NonNull Long responseBodySizeInBytes) {
+		requireNonNull(streamingResponseHandle);
+		requireNonNull(streamTermination);
+		requireNonNull(requestDuration);
+		requireNonNull(responseBodySizeInBytes);
+		if (responseBodySizeInBytes < 0L) throw new IllegalArgumentException("Response body size must be nonnegative.");
+		if (streamingResponseHandle.getServerType() != ServerType.HTTP) return;
+		Request request = streamingResponseHandle.getRequest();
+		Attributes attributes = this.responseStreamsInFlight.remove(request);
+		if (attributes == null) return;
+		Throwable cause = streamTermination.getCause().orElse(null);
+		if (attributes.get(ERROR_TYPE_ATTRIBUTE_KEY) == null && cause != null)
+			attributes = attributes.toBuilder().put(ERROR_TYPE_ATTRIBUTE_KEY, cause.getClass().getName()).build();
+		this.activeRequestsCounter.add(-1, activeRequestAttributes(ServerType.HTTP, request));
+		this.requestDurationHistogram.record(seconds(requestDuration), attributes);
+		this.responseBodySizeHistogram.record(responseBodySizeInBytes, attributes);
+		int statusCode = streamingResponseHandle.getMarshaledResponse().getStatusCode();
+		this.responseStreamTerminationsCounter.add(1, Attributes.builder()
+				.put(HTTP_METHOD_ATTRIBUTE_KEY, request.getHttpMethod().name())
+				.put(HTTP_ROUTE_ATTRIBUTE_KEY, routeFor(streamingResponseHandle.getResourceMethod().orElse(null)))
+				.put("soklet.http.status_class", statusCode >= 100 && statusCode <= 599 ? (statusCode / 100) + "xx" : "other")
+				.put("soklet.http.response.stream.termination.reason", streamTermination.getReason().name()).build());
 	}
 
 	@Override

@@ -81,6 +81,14 @@ SokletConfig config = SokletConfig.withHttpServer(
 ).build();
 ```
 
+The tracing observer neither writes log events to stderr nor exports
+OpenTelemetry logs. Configuring it replaces Soklet's unconfigured default
+observer. Add an application logging observer to the same collection, or
+include [`LifecycleObserver.defaultInstance()`](<https://javadoc.soklet.com/com/soklet/LifecycleObserver.html#defaultInstance()>)
+for stderr logging. Custom observers inherit a no-op log callback in Soklet
+4.0.0; see [Event Logging](https://www.soklet.com/docs/request-lifecycle#event-logging)
+for application log routing.
+
 Related API references:
 
 - [`OpenTelemetryMetricsCollector`](https://otel.javadoc.soklet.com/com/soklet/otel/OpenTelemetryMetricsCollector.html)
@@ -214,7 +222,7 @@ The fixed enum-backed vocabularies are:
 - Request outcome: `complete`, `input_required`, `rejected`, `application_error`, `protocol_error`,
   `internal_error`, `canceled`, `deadline_exceeded`, `client_disconnected`, `write_failed`.
 - Request-stream and subscription termination reason: `completed`, `client_disconnected`, `request_canceled`,
-  `deadline_exceeded`, `write_failed`, `backpressure`, `server_stopping`,
+  `session_expired`, `session_closed`, `deadline_exceeded`, `write_failed`, `backpressure`, `server_stopping`,
   `simulator_capture_item_limit_exceeded`, `simulator_capture_byte_limit_exceeded`,
   `subscription_authorization_denied`, `subscription_authorization_expired`,
   `subscription_authorization_check_failed`, `subscription_reconciliation_failed`, `internal_error`.
@@ -226,6 +234,13 @@ The fixed enum-backed vocabularies are:
   `response_write_idle_timeout_error`, `accept_loop_error`, `connection_setup_error`, `task_error`,
   `timeout_task_error`, `selection_key_error`, `register_error`, `write_timeout`, `event_loop_terminated`,
   `unknown`.
+
+`session_expired` and `session_closed` describe 2025 MCP session expiry and closure,
+including verified DELETE retirement. They appear on the existing request-stream
+and subscription duration instruments; there are no separate session-count or
+session-lifetime instruments, and session IDs are not metric attributes.
+Native HTTP stream termination counts use uppercase `StreamTerminationReason`
+names under `soklet.http.response.stream.termination.reason`.
 
 Common attributes:
 
@@ -290,7 +305,9 @@ ID. The simulator makes a dispatch copy so concurrent reuse of one input request
 Request wrapping and interception may replace requests and change IDs without merging concurrent
 spans or leaking them. The original request supplies parent trace context and HTTP method; the resolved
 resource method supplies the route. A streaming span ends after both handling completion and stream
-termination have been observed, including when the transport finishes first. HTTP 5xx responses without
+termination have been observed, including when the transport finishes first. If the HTTP transport replaces
+a stream with a finite response before committing its head, the span ends at handling completion with the
+actual replacement status. A later termination callback does not create a second span. HTTP 5xx responses without
 a throwable use the decimal status (for example, `503`) as `error.type`; throwable-free stream failures
 use the fixed lower-snake termination reason. Superseding a span or closing the observer does not label
 ordinary HTTP work as a stopped stream.
@@ -429,3 +446,7 @@ Soklet 4.0.0.
   section above. There is no MCP session-duration instrument.
 
 For Soklet documentation and lifecycle semantics, see [https://www.soklet.com](https://www.soklet.com).
+
+### Streaming HTTP metrics
+
+Under both naming strategies, active HTTP requests remain counted through transport termination. The existing request-duration and response-body-size histograms use the terminal callback's full monotonic duration and observed payload bytes. Response-write duration remains the handoff duration. `soklet.http.response.stream.terminations` adds bounded method, configured route, status-class and uppercase reason dimensions. Finite replacements and suppressed bodies keep finite accounting; duplicate terminal callbacks are ignored.

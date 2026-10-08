@@ -53,6 +53,10 @@ import org.jspecify.annotations.Nullable;
 import javax.annotation.concurrent.NotThreadSafe;
 import javax.annotation.concurrent.ThreadSafe;
 import java.net.InetSocketAddress;
+import java.lang.ref.ReferenceQueue;
+import java.lang.ref.WeakReference;
+import java.util.HashSet;
+import java.util.Set;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
@@ -72,6 +76,11 @@ import static java.util.Objects.requireNonNull;
  * The {@code soklet.server.type} attribute uses {@code http}, {@code sse}, or {@code mcp},
  * matching the metrics vocabulary wherever that attribute is emitted. In 2.0.0, HTTP spans retain
  * {@code http}; SSE spans use {@code sse} instead of the legacy value {@code server_sent_event}.
+ * <p>
+ * This observer inherits Soklet 4.0's no-op log-event callback; it neither
+ * prints events to stderr nor exports OpenTelemetry logs. Register an
+ * application logging observer alongside it, or include
+ * {@link LifecycleObserver#defaultInstance()} for default stderr logging.
  *
  * @author <a href="https://www.revetkn.com">Mark Allen</a>
  */
@@ -149,6 +158,10 @@ public final class OpenTelemetryLifecycleObserver implements LifecycleObserver, 
 	private final SpanPolicy spanPolicy;
 	@NonNull
 	private final ConcurrentMap<IdentityKey<Request>, SpanState> httpRequestSpans;
+	// No strong request/span retention: a rejected stream callback can arrive
+	// after its finite response finish, or be omitted when observer capacity is full.
+	private final Set<CompletedStreamRequest> completedFiniteStreamRequests = new HashSet<>();
+	private final ReferenceQueue<Request> completedFiniteStreamRequestQueue = new ReferenceQueue<>();
 	@NonNull
 	private final ConcurrentMap<IdentityKey<McpRequestContext>, McpSpanState> mcpRequestSpans;
 	@NonNull
@@ -214,6 +227,7 @@ public final class OpenTelemetryLifecycleObserver implements LifecycleObserver, 
 			return;
 
 		drain(this.httpRequestSpans, false);
+		synchronized (this.completedFiniteStreamRequests) { this.completedFiniteStreamRequests.clear(); }
 		drainMcpRequestSpans();
 		drain(this.sseConnectionSpans, true);
 	}
@@ -258,6 +272,17 @@ public final class OpenTelemetryLifecycleObserver implements LifecycleObserver, 
 	}
 
 	@Override
+	public void willWriteResponse(@NonNull ServerType serverType, @NonNull Request request,
+			@Nullable ResourceMethod resourceMethod, @NonNull MarshaledResponse marshaledResponse) {
+		requireNonNull(serverType); requireNonNull(request); requireNonNull(marshaledResponse);
+		if (!marshaledResponse.isStreaming()) return;
+		SpanState state = this.httpRequestSpans.get(new IdentityKey<>(request));
+		if (state != null) {
+			synchronized (state) { state.httpStreamAttempted = true; }
+		}
+	}
+
+	@Override
 	public void didFinishRequestHandling(@NonNull ServerType serverType,
 																			 @NonNull Request request,
 																			 @Nullable ResourceMethod resourceMethod,
@@ -285,6 +310,8 @@ public final class OpenTelemetryLifecycleObserver implements LifecycleObserver, 
 					return;
 				spanState.httpHandlingFinished = true;
 				boolean keepOpen = marshaledResponse.isStreaming() && this.spanPolicy.recordStreamingResponseSpans();
+				if (!marshaledResponse.isStreaming() && spanState.httpStreamAttempted)
+					recordFiniteStreamCompletion(request);
 				try {
 					applyHttpFinish(spanState.span(), resourceMethod, marshaledResponse, throwables);
 				} finally {
@@ -381,6 +408,7 @@ public final class OpenTelemetryLifecycleObserver implements LifecycleObserver, 
 			SpanState spanState = this.httpRequestSpans.get(key);
 			Instant finishedAt = streamingResponseHandle.getEstablishedAt().plus(streamTermination.getDuration());
 			if (spanState == null) {
+				if (hasFiniteStreamCompletion(streamingResponseHandle.getRequest())) return;
 				SpanState backfilled = backfilledStreamingSpan(streamingResponseHandle);
 				try {
 					applyHttpFinish(backfilled.span(), streamingResponseHandle.getResourceMethod().orElse(null),
@@ -983,11 +1011,45 @@ public final class OpenTelemetryLifecycleObserver implements LifecycleObserver, 
 		}
 	}
 
+	private void recordFiniteStreamCompletion(Request request) {
+		synchronized (this.completedFiniteStreamRequests) {
+			clearCollectedFiniteStreamRequests();
+			this.completedFiniteStreamRequests.add(new CompletedStreamRequest(request, this.completedFiniteStreamRequestQueue));
+		}
+	}
+
+	private boolean hasFiniteStreamCompletion(Request request) {
+		synchronized (this.completedFiniteStreamRequests) {
+			clearCollectedFiniteStreamRequests();
+			return this.completedFiniteStreamRequests.contains(new CompletedStreamRequest(request, null));
+		}
+	}
+
+	private void clearCollectedFiniteStreamRequests() {
+		Object collected;
+		while ((collected = this.completedFiniteStreamRequestQueue.poll()) != null)
+			this.completedFiniteStreamRequests.remove(collected);
+	}
+
+	private static final class CompletedStreamRequest extends WeakReference<Request> {
+		private final int identityHash;
+		private CompletedStreamRequest(Request request, @Nullable ReferenceQueue<Request> queue) {
+			super(request, queue); this.identityHash = System.identityHashCode(request);
+		}
+		@Override public int hashCode() { return this.identityHash; }
+		@Override public boolean equals(@Nullable Object object) {
+			if (this == object) return true;
+			Request request = get();
+			return object instanceof CompletedStreamRequest other && request != null && request == other.get();
+		}
+	}
+
 	private static final class SpanState {
 		private final @NonNull Span span;
 		private final @NonNull Instant startedAt;
 		// HTTP completion state is accessed only while synchronized on this SpanState.
 		private boolean httpHandlingFinished;
+		private boolean httpStreamAttempted;
 		private @Nullable StreamTermination pendingHttpStreamTermination;
 		private @Nullable Instant httpStreamFinishedAt;
 

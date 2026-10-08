@@ -114,6 +114,49 @@ public class OpenTelemetryMetricsCollectorTests {
 	private static final String MCP_METHOD = "tools/call";
 
 	@Test
+	public void streamingHttpMetricsFinishAtTransportTerminationUnderBothNamingStrategies() throws Exception {
+		for (var strategy : OpenTelemetryMetricsCollector.MetricNamingStrategy.values()) {
+			TestHarness harness = TestHarness.create();
+			var collector = OpenTelemetryMetricsCollector.withMeter(harness.openTelemetrySdk().getMeter("stream-http"))
+					.metricNamingStrategy(strategy).build();
+			ResourceMethod method = createResourceMethod(HttpMethod.GET, "/streams/{id}", "widget");
+			Request request = Request.withPath(HttpMethod.GET, "/streams/private-path-canary").build();
+			MarshaledResponse response = MarshaledResponse.withStatusCode(200).stream(stream -> {}).build();
+			collector.didStartRequestHandling(ServerType.HTTP, request, method);
+			collector.didFinishRequestHandling(ServerType.HTTP, request, method, response, Duration.ofMillis(2), List.of());
+			boolean semconv = strategy == OpenTelemetryMetricsCollector.MetricNamingStrategy.SEMCONV;
+			String active = semconv ? "http.server.active_requests" : "soklet.server.requests.active";
+			String duration = semconv ? "http.server.request.duration" : "soklet.server.request.duration";
+			String body = semconv ? "http.server.response.body.size" : "soklet.server.response.body.size";
+			var live = harness.metricReader().collectAllMetrics();
+			Assertions.assertEquals(1L, longSumValue(live, active, a -> true));
+			Assertions.assertTrue(live.stream().noneMatch(metric -> duration.equals(metric.getName()) || body.equals(metric.getName())));
+			com.soklet.StreamingResponseHandle handle = new com.soklet.StreamingResponseHandle() {
+				@Override public ServerType getServerType() { return ServerType.HTTP; }
+				@Override public Request getRequest() { return request; }
+				@Override public Optional<ResourceMethod> getResourceMethod() { return Optional.of(method); }
+				@Override public MarshaledResponse getMarshaledResponse() { return response; }
+				@Override public Instant getEstablishedAt() { return Instant.now(); }
+			};
+			StreamTermination termination = StreamTermination.with(StreamTerminationReason.PRODUCER_FAILED, Duration.ofMillis(10)).build();
+			collector.didTerminateResponseStream(handle, termination, Duration.ofMillis(125), 7L);
+			collector.didTerminateResponseStream(handle, termination, Duration.ofMillis(250), 99L);
+			var metrics = harness.metricReader().collectAllMetrics();
+			Assertions.assertEquals(0L, longSumValue(metrics, active, a -> true));
+			Assertions.assertEquals(1L, histogramCount(metrics, duration, a -> true));
+			Assertions.assertEquals(0.125D, histogramSum(metrics, duration, a -> true), 0.000001D);
+			Assertions.assertEquals(7D, histogramSum(metrics, body, a -> true));
+			Assertions.assertEquals(1L, longSumValue(metrics, "soklet.http.response.stream.terminations", a -> {
+				Assertions.assertEquals("/streams/{id}", a.get(ROUTE_ATTRIBUTE_KEY));
+				Assertions.assertEquals("2xx", a.get(AttributeKey.stringKey("soklet.http.status_class")));
+				Assertions.assertEquals("PRODUCER_FAILED", a.get(AttributeKey.stringKey("soklet.http.response.stream.termination.reason")));
+				Assertions.assertFalse(a.toString().contains("private-path-canary"));
+				Assertions.assertEquals(4, a.size()); return true;
+			}));
+		}
+	}
+
+	@Test
 	public void recordsHttpRequestAndResponseMetrics() throws Exception {
 		TestHarness harness = TestHarness.create();
 		OpenTelemetryMetricsCollector collector = OpenTelemetryMetricsCollector

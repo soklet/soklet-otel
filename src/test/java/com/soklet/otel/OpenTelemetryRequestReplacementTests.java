@@ -177,17 +177,6 @@ public class OpenTelemetryRequestReplacementTests {
 			public void didStartRequestHandling(@NonNull ServerType type, @NonNull Request request,
 					@Nullable ResourceMethod method) { startedRequest.set(request); }
 			@Override
-			public void didWriteResponse(@NonNull ServerType type, @NonNull Request request,
-					@Nullable ResourceMethod method, @NonNull MarshaledResponse response, @NonNull Duration duration) {
-				try {
-					if (!terminated.await(5, TimeUnit.SECONDS))
-						observationFailure.set(new AssertionError("Stream did not terminate before handling finish"));
-				} catch (InterruptedException exception) {
-					Thread.currentThread().interrupt();
-					observationFailure.set(exception);
-				}
-			}
-			@Override
 			public void didFinishRequestHandling(@NonNull ServerType type, @NonNull Request request,
 					@Nullable ResourceMethod method, @NonNull MarshaledResponse response,
 					@NonNull Duration duration, @NonNull List<@NonNull Throwable> throwables) {
@@ -202,12 +191,28 @@ public class OpenTelemetryRequestReplacementTests {
 				terminated.countDown();
 			}
 		};
+		// Metrics handling finish must precede terminal metrics and lifecycle stream callbacks.
+		// Hold lifecycle handling finish (rather than write handoff) to retain the early-terminal span control.
+		LifecycleObserver finishGate = new LifecycleObserver() {
+			@Override public void didReceiveLogEvent(@NonNull LogEvent event) {}
+			@Override public void didFinishRequestHandling(@NonNull ServerType type, @NonNull Request request,
+					@Nullable ResourceMethod method, @NonNull MarshaledResponse response, @NonNull Duration duration,
+					@NonNull List<@NonNull Throwable> throwables) {
+				try {
+					if (!terminated.await(5, TimeUnit.SECONDS))
+						observationFailure.set(new AssertionError("Stream did not terminate before lifecycle handling finish"));
+				} catch (InterruptedException exception) {
+					Thread.currentThread().interrupt(); observationFailure.set(exception);
+				}
+			}
+		};
+
 		try (OpenTelemetrySdk sdk = sdk(exporter);
 			 OpenTelemetryLifecycleObserver observer = OpenTelemetryLifecycleObserver.fromOpenTelemetry(sdk);
 			 Soklet soklet = Soklet.fromConfig(SokletConfig.withHttpServer(HttpServer.withPort(port).host("127.0.0.1").build())
 					.resourceMethodResolver(ResourceMethodResolver.fromClasses(Set.of(Resource.class)))
 					.requestInterceptor(replacingInterceptor(true, "/stream", null, null))
-					.lifecycleObservers(List.of(observer, order)).build())) {
+					.lifecycleObservers(List.of(finishGate, observer, order)).build())) {
 			soklet.start();
 			HttpURLConnection connection = (HttpURLConnection) new URL("http://127.0.0.1:" + port + "/original").openConnection();
 			connection.setConnectTimeout(2_000);
