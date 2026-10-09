@@ -204,7 +204,12 @@ MCP metrics in 2.0.0 map all 24 [`McpMetricsEvent`](https://javadoc.soklet.com/c
 
 The request-duration histogram advises these finite boundaries in seconds:
 `0.001`, `0.002`, `0.005`, `0.01`, `0.025`, `0.05`, `0.1`, `0.2`, `0.4`, `0.8`,
-`1.5`, `3`, `7`, and `15`. Request-stream and subscription duration histograms advise
+`1.5`, `3`, `7`, `15`, `30`, `60`, `120`, and `300`. These boundaries apply across
+supported MCP revisions and cover the default 60-second request timeout and
+longer configured deadlines. Values above five minutes use the overflow bucket.
+OpenTelemetry SDK views can override this boundary advice. Recheck dashboards
+and alerts that assume the previous 15-second ceiling.
+Request-stream and subscription duration histograms advise
 `1`, `5`, `10`, `30`, `60`, `120`, `300`, `600`, `1800`, `3600`, `7200`, and `14400`
 seconds. The OpenTelemetry SDK supplies the overflow bucket.
 
@@ -442,7 +447,7 @@ Soklet 4.0.0.
 - `soklet.sse.stream.duration` advises long-lived bucket boundaries
   (1s, 10s, 60s, 5m, 30m, 1h, 4h, 24h) instead of OpenTelemetry's request-oriented defaults.
   Its bucket layout changed in 1.3.0 - recheck any dashboards or alerts that referenced its previous defaults.
-- The modern MCP request, request-stream, and subscription histogram boundaries are listed in the MCP table
+- The MCP request, request-stream, and subscription histogram boundaries are listed in the MCP table
   section above. There is no MCP session-duration instrument.
 
 For Soklet documentation and lifecycle semantics, see [https://www.soklet.com](https://www.soklet.com).

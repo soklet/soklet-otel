@@ -204,9 +204,10 @@ public final class OpenTelemetryMetricsCollector implements MetricsCollector {
 		// SSE streams live for minutes-to-hours, so OpenTelemetry's request-oriented
 		// defaults would collapse nearly all measurements into the +Inf bucket.
 		LONG_LIVED_DURATION_BUCKET_BOUNDARIES = List.of(1D, 10D, 60D, 300D, 1_800D, 3_600D, 14_400D, 86_400D);
+		// Cover the default 60-second MCP request timeout and longer configured deadlines.
 		MCP_REQUEST_DURATION_BUCKET_BOUNDARIES = List.of(
 				0.001D, 0.002D, 0.005D, 0.010D, 0.025D, 0.050D, 0.100D,
-				0.200D, 0.400D, 0.800D, 1.500D, 3D, 7D, 15D);
+				0.200D, 0.400D, 0.800D, 1.500D, 3D, 7D, 15D, 30D, 60D, 120D, 300D);
 		MCP_LONG_LIVED_DURATION_BUCKET_BOUNDARIES = List.of(
 				1D, 5D, 10D, 30D, 60D, 120D, 300D, 600D, 1_800D,
 				3_600D, 7_200D, 14_400D);

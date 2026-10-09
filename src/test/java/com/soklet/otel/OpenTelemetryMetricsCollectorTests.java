@@ -106,7 +106,8 @@ public class OpenTelemetryMetricsCollectorTests {
 			"termination_unknown");
 	private static final List<Double> MCP_REQUEST_DURATION_BUCKET_BOUNDARIES = List.of(
 			0.001D, 0.002D, 0.005D, 0.010D, 0.025D, 0.050D,
-			0.100D, 0.200D, 0.400D, 0.800D, 1.5D, 3D, 7D, 15D);
+			0.100D, 0.200D, 0.400D, 0.800D, 1.5D, 3D, 7D, 15D,
+			30D, 60D, 120D, 300D);
 	private static final List<Double> MCP_STREAM_DURATION_BUCKET_BOUNDARIES = List.of(
 			1D, 5D, 10D, 30D, 60D, 120D, 300D, 600D, 1_800D,
 			3_600D, 7_200D, 14_400D);
@@ -540,6 +541,50 @@ public class OpenTelemetryMetricsCollectorTests {
 					.collect(Collectors.toSet());
 			Assertions.assertEquals(expectation.metricNames(), actualNames,
 					expectation.event().getClass().getSimpleName());
+		}
+	}
+
+	@Test
+	public void slowMcpRequestsRetainFiniteBucketsUnderBothNamingStrategies() {
+		List<Duration> durations = List.of(
+				Duration.ofSeconds(15), Duration.ofSeconds(15).plusNanos(1),
+				Duration.ofSeconds(20), Duration.ofSeconds(30),
+				Duration.ofSeconds(30).plusNanos(1), Duration.ofSeconds(60),
+				Duration.ofSeconds(60).plusNanos(1), Duration.ofSeconds(120),
+				Duration.ofSeconds(120).plusNanos(1), Duration.ofSeconds(300),
+				Duration.ofSeconds(300).plusNanos(1));
+		for (var strategy : OpenTelemetryMetricsCollector.MetricNamingStrategy.values()) {
+			TestHarness harness = TestHarness.create();
+			try {
+				var collector = OpenTelemetryMetricsCollector.withMeter(harness.openTelemetrySdk().getMeter("slow-mcp"))
+						.metricNamingStrategy(strategy).build();
+				for (var outcome : List.of(McpRequestOutcome.COMPLETE, McpRequestOutcome.DEADLINE_EXCEEDED)) {
+					for (Duration duration : durations) {
+						collector.didRecordMcpMetricsEvent(McpMetricsEvent.requestStarted(MCP_ENDPOINT, MCP_METHOD));
+						collector.didRecordMcpMetricsEvent(McpMetricsEvent.requestFinished(MCP_ENDPOINT, MCP_METHOD, outcome, duration));
+					}
+				}
+				Collection<MetricData> metrics = harness.metricReader().collectAllMetrics();
+				MetricData metric = metricByName(metrics, "soklet.mcp.request.duration");
+				Assertions.assertEquals("s", metric.getUnit());
+				Assertions.assertEquals(2, metric.getHistogramData().getPoints().size());
+				for (HistogramPointData point : metric.getHistogramData().getPoints()) {
+					Assertions.assertEquals(MCP_REQUEST_DURATION_BUCKET_BOUNDARIES, point.getBoundaries());
+					Assertions.assertEquals(List.of(0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L,
+							1L, 3L, 2L, 2L, 2L, 1L), point.getCounts());
+					Assertions.assertEquals(11L, point.getCount());
+					Assertions.assertEquals(1_070.000000005D, point.getSum(), 1e-8D);
+					Assertions.assertEquals(15D, point.getMin());
+					Assertions.assertEquals(300.000000001D, point.getMax(), 1e-10D);
+					Assertions.assertEquals(MCP_ENDPOINT, point.getAttributes().get(MCP_ENDPOINT_ATTRIBUTE_KEY));
+					Assertions.assertEquals(MCP_METHOD, point.getAttributes().get(RPC_METHOD_ATTRIBUTE_KEY));
+				}
+				Assertions.assertEquals(Set.of("complete", "deadline_exceeded"), metric.getHistogramData().getPoints().stream()
+						.map(point -> point.getAttributes().get(MCP_REQUEST_OUTCOME_ATTRIBUTE_KEY)).collect(Collectors.toSet()));
+				Assertions.assertEquals(0L, longSumValue(metrics, "soklet.mcp.requests.active", attributes -> true));
+			} finally {
+				harness.openTelemetrySdk().close();
+			}
 		}
 	}
 
