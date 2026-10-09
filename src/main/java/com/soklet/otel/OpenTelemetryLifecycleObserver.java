@@ -55,7 +55,6 @@ import javax.annotation.concurrent.ThreadSafe;
 import java.net.InetSocketAddress;
 import java.lang.ref.ReferenceQueue;
 import java.lang.ref.WeakReference;
-import java.util.HashSet;
 import java.util.Set;
 import java.time.Duration;
 import java.time.Instant;
@@ -160,7 +159,7 @@ public final class OpenTelemetryLifecycleObserver implements LifecycleObserver, 
 	private final ConcurrentMap<IdentityKey<Request>, SpanState> httpRequestSpans;
 	// No strong request/span retention: a rejected stream callback can arrive
 	// after its finite response finish, or be omitted when observer capacity is full.
-	private final Set<CompletedStreamRequest> completedFiniteStreamRequests = new HashSet<>();
+	private final Set<CompletedStreamRequest> completedFiniteStreamRequests = ConcurrentHashMap.newKeySet();
 	private final ReferenceQueue<Request> completedFiniteStreamRequestQueue = new ReferenceQueue<>();
 	@NonNull
 	private final ConcurrentMap<IdentityKey<McpRequestContext>, McpSpanState> mcpRequestSpans;
@@ -227,7 +226,7 @@ public final class OpenTelemetryLifecycleObserver implements LifecycleObserver, 
 			return;
 
 		drain(this.httpRequestSpans, false);
-		synchronized (this.completedFiniteStreamRequests) { this.completedFiniteStreamRequests.clear(); }
+		this.completedFiniteStreamRequests.clear();
 		drainMcpRequestSpans();
 		drain(this.sseConnectionSpans, true);
 	}
@@ -1031,10 +1030,8 @@ public final class OpenTelemetryLifecycleObserver implements LifecycleObserver, 
 	}
 
 	private boolean recordFiniteStreamCompletion(Request request) {
-		synchronized (this.completedFiniteStreamRequests) {
-			clearCollectedFiniteStreamRequests();
-			return this.completedFiniteStreamRequests.add(new CompletedStreamRequest(request, this.completedFiniteStreamRequestQueue));
-		}
+		clearCollectedFiniteStreamRequests();
+		return this.completedFiniteStreamRequests.add(new CompletedStreamRequest(request, this.completedFiniteStreamRequestQueue));
 	}
 
 	private void clearCollectedFiniteStreamRequests() {

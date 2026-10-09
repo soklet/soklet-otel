@@ -310,7 +310,10 @@ ID. The simulator makes a dispatch copy so concurrent reuse of one input request
 Request wrapping and interception may replace requests and change IDs without merging concurrent
 spans or leaking them. The original request supplies parent trace context and HTTP method; the resolved
 resource method supplies the route. A streaming span ends after both handling completion and stream
-termination have been observed, including when the transport finishes first. If the HTTP transport replaces
+termination have been observed, including when the transport finishes first.
+Delegating observers and collectors must forward `willWriteResponseStream`
+and the corresponding terminal callbacks; omitting preparation ends accounting
+at handling handoff instead of keeping the admitted stream open. If the HTTP transport replaces
 a stream with a finite response before committing its head, the span ends at handling completion with the
 actual replacement status. A later termination callback does not create a second span. HTTP 5xx responses without
 a throwable use the decimal status (for example, `503`) as `error.type`; throwable-free stream failures
@@ -454,4 +457,4 @@ For Soklet documentation and lifecycle semantics, see [https://www.soklet.com](h
 
 ### Streaming HTTP metrics
 
-Under both naming strategies, active HTTP requests remain counted through transport termination. The existing request-duration and response-body-size histograms use the terminal callback's full monotonic duration and observed payload bytes. Response-write duration remains the handoff duration. `soklet.http.response.stream.terminations` adds bounded method, configured route, status-class and uppercase reason dimensions. Finite replacements and suppressed bodies keep finite accounting; duplicate terminal callbacks are ignored.
+Under both naming strategies, active HTTP requests remain counted through transport termination. The existing request-duration and response-body-size histograms use the terminal callback's full monotonic duration and observed payload bytes. Response-write duration remains the handoff duration. `soklet.http.response.stream.terminations` adds bounded method, configured route, status-class and uppercase reason dimensions. Finite replacements and suppressed bodies keep finite accounting; duplicate terminal callbacks are ignored. Delegating collectors must forward `willWriteResponseStream` as well as terminal notifications. Final MCP semantic metrics can arrive after Soklet shutdown and application cleanup; closing exporters in cleanup is not a semantic-metrics flush barrier.
