@@ -18,6 +18,7 @@ package com.soklet.otel;
 
 import com.soklet.HttpMethod;
 import com.soklet.HttpServer;
+import com.soklet.LifecycleObserver;
 import com.soklet.LifecyclePolicy;
 import com.soklet.MarshaledResponse;
 import com.soklet.McpJsonRpcError;
@@ -31,6 +32,8 @@ import com.soklet.ResourcePathDeclaration;
 import com.soklet.ServerType;
 import com.soklet.Soklet;
 import com.soklet.SokletConfig;
+import com.soklet.SokletSimulator;
+import com.soklet.SimulatorConfig;
 import com.soklet.SseConnection;
 import com.soklet.SseEvent;
 import com.soklet.StreamTermination;
@@ -82,6 +85,207 @@ import static java.util.Objects.requireNonNull;
  * @author <a href="https://www.revetkn.com">Mark Allen</a>
  */
 public class OpenTelemetryLifecycleObserverTests {
+	@Test
+	@org.junit.jupiter.api.Timeout(15)
+	public void simulatedStreamSpanEndsAtTerminalTimeDespiteDelayedHandlingFinish() {
+		TestHarness harness = TestHarness.create();
+		var producerFinishedAt = new java.util.concurrent.atomic.AtomicReference<Instant>();
+		var terminalObservedAt = new java.util.concurrent.atomic.AtomicReference<Instant>();
+		var callbackFailure = new java.util.concurrent.atomic.AtomicReference<Throwable>();
+		LifecycleObserver timingObserver = new LifecycleObserver() {
+			@Override
+			public void didFinishRequestHandling(ServerType serverType, Request request, ResourceMethod resourceMethod,
+					MarshaledResponse marshaledResponse, Duration duration, List<Throwable> throwables) {
+				if (!marshaledResponse.isStreaming()) return;
+				try {
+					// Materialization starts after this callback. Make the preparation/source
+					// epoch gap visible without depending on producer execution speed.
+					new CountDownLatch(1).await(100, TimeUnit.MILLISECONDS);
+				} catch (InterruptedException exception) {
+					Thread.currentThread().interrupt();
+					callbackFailure.set(exception);
+				}
+			}
+			@Override
+			public void didTerminateResponseStream(StreamingResponseHandle handle, StreamTermination termination) {
+				terminalObservedAt.set(Instant.now());
+				if (termination.getReason() != StreamTerminationReason.COMPLETED)
+					callbackFailure.set(new AssertionError("Unexpected termination: " + termination.getReason()));
+			}
+		};
+		try (OpenTelemetryLifecycleObserver observer = OpenTelemetryLifecycleObserver
+				.withOpenTelemetry(harness.openTelemetrySdk()).build()) {
+			SokletSimulator.run(SimulatorConfig.builder().httpServer()
+					.resourceMethodResolver(ResourceMethodResolver.fromClasses(Set.of(RejectionHealthResource.class)))
+					.lifecycleObservers(List.of(timingObserver, observer))
+					.requestInterceptor(new RequestInterceptor() {
+						@Override
+						public void interceptRequest(ServerType serverType, Request request, ResourceMethod resourceMethod,
+								Function<Request, MarshaledResponse> responseGenerator, Consumer<MarshaledResponse> responseWriter) {
+							responseWriter.accept(MarshaledResponse.withStatusCode(200)
+									.streamingResponseBody(StreamingResponseBody.fromWriter(responseStream -> {
+										responseStream.write("payload".getBytes(StandardCharsets.US_ASCII));
+										producerFinishedAt.set(Instant.now());
+									})).build());
+						}
+					}).build(), simulator -> {
+				Assertions.assertEquals(7L, simulator.performHttpRequest(Request.withPath(HttpMethod.GET, "/health")
+						.build()).getMarshaledResponse().getBodyLength());
+			});
+			Assertions.assertNull(callbackFailure.get());
+			Assertions.assertNotNull(producerFinishedAt.get());
+			Assertions.assertNotNull(terminalObservedAt.get());
+			SpanData span = onlySpan(harness);
+			Instant endedAt = Instant.ofEpochSecond(0, span.getEndEpochNanos());
+			// Allow clock sampling skew, much less than the deliberate 100ms epoch gap.
+			Assertions.assertFalse(endedAt.plusMillis(10).isBefore(producerFinishedAt.get()),
+					"Span ended before its final producer write: " + endedAt);
+			Assertions.assertFalse(endedAt.isAfter(terminalObservedAt.get().plusMillis(10)),
+					"Span included terminal observer queue delay: " + endedAt);
+			Assertions.assertEquals(0, observer.getActiveSpanCount());
+		} finally { harness.openTelemetrySdk().close(); }
+	}
+
+	@Test
+	@org.junit.jupiter.api.Timeout(15)
+	public void concurrentUnpairedTerminationsBackfillOnlyOneSpan() throws Exception {
+		TestHarness harness = TestHarness.create();
+		CountDownLatch namingEntered = new CountDownLatch(1);
+		CountDownLatch releaseNaming = new CountDownLatch(1);
+		var namingCalls = new java.util.concurrent.atomic.AtomicInteger();
+		SpanNamingStrategy defaults = SpanNamingStrategy.defaultInstance();
+		SpanNamingStrategy naming = new SpanNamingStrategy() {
+			@Override public String httpRequestSpanName(Request request, ResourceMethod resourceMethod) {
+				return defaults.httpRequestSpanName(request, resourceMethod);
+			}
+			@Override public String sseConnectionSpanName(SseConnection connection) {
+				return defaults.sseConnectionSpanName(connection);
+			}
+			@Override public String streamingResponseSpanName(StreamingResponseHandle streamingResponseHandle) {
+				if (namingCalls.incrementAndGet() == 1) {
+					namingEntered.countDown();
+					try {
+						if (!releaseNaming.await(3, TimeUnit.SECONDS))
+							throw new IllegalStateException("Naming was not released");
+					} catch (InterruptedException exception) {
+						Thread.currentThread().interrupt();
+						throw new IllegalStateException(exception);
+					}
+				}
+				return defaults.streamingResponseSpanName(streamingResponseHandle);
+			}
+		};
+		ExecutorService executor = Executors.newSingleThreadExecutor();
+		try (var observer = OpenTelemetryLifecycleObserver.withOpenTelemetry(harness.openTelemetrySdk())
+				.spanNamingStrategy(naming).build()) {
+			Request request = Request.fromPath(HttpMethod.GET, "/unpaired");
+			var handle = new TestStreamingResponseHandle(request, null,
+					MarshaledResponse.withStatusCode(200).stream(stream -> {}).build(), Instant.now());
+			var termination = StreamTermination.with(StreamTerminationReason.COMPLETED, Duration.ZERO).build();
+			var first = executor.submit(() -> observer.didTerminateResponseStream(handle, termination));
+			Assertions.assertTrue(namingEntered.await(3, TimeUnit.SECONDS));
+			observer.didTerminateResponseStream(handle, termination);
+			releaseNaming.countDown();
+			first.get(3, TimeUnit.SECONDS);
+			Assertions.assertEquals(1, namingCalls.get());
+			onlySpan(harness);
+		} finally {
+			releaseNaming.countDown();
+			executor.shutdownNow();
+			Assertions.assertTrue(executor.awaitTermination(3, TimeUnit.SECONDS));
+			harness.openTelemetrySdk().close();
+		}
+	}
+
+	@Test
+	public void streamingCompletionRequiresPreparationAndHandlesBothCallbackOrders() throws Exception {
+		for (boolean prepared : List.of(false, true)) {
+			for (boolean terminalFirst : List.of(false, true)) {
+				TestHarness harness = TestHarness.create();
+				try (var observer = OpenTelemetryLifecycleObserver.withOpenTelemetry(harness.openTelemetrySdk()).build()) {
+					Request request = Request.fromPath(HttpMethod.GET, "/custom-stream");
+					MarshaledResponse response = MarshaledResponse.withStatusCode(200).stream(stream -> {}).build();
+					var handle = new TestStreamingResponseHandle(request, null, response, Instant.now());
+					var termination = StreamTermination.with(StreamTerminationReason.PRODUCER_FAILED, Duration.ZERO).build();
+					observer.didStartRequestHandling(ServerType.HTTP, request, null);
+					if (prepared) observer.willWriteResponseStream(handle);
+					if (terminalFirst) observer.didTerminateResponseStream(handle, termination);
+					observer.didFinishRequestHandling(ServerType.HTTP, request, null, response, Duration.ZERO, List.of());
+					if (!terminalFirst) observer.didTerminateResponseStream(handle, termination);
+					observer.didTerminateResponseStream(handle, termination);
+					Assertions.assertEquals(0, observer.getActiveSpanCount());
+					SpanData span = onlySpan(harness);
+					Assertions.assertEquals(200L, span.getAttributes().get(STATUS_CODE_ATTRIBUTE_KEY));
+					Assertions.assertEquals(prepared ? "producer_failed" : null,
+							span.getAttributes().get(STREAM_TERMINATION_REASON_ATTRIBUTE_KEY));
+				} finally { harness.openTelemetrySdk().close(); }
+			}
+		}
+	}
+
+	@Test
+	public void finiteReplacementIsIndependentOfRequestIdentityAndTerminationOrder() throws Exception {
+		for (boolean terminationFirst : List.of(false, true)) {
+			TestHarness harness = TestHarness.create();
+			try (OpenTelemetryLifecycleObserver observer = OpenTelemetryLifecycleObserver
+					.withOpenTelemetry(harness.openTelemetrySdk()).build()) {
+				Request originalRequest = Request.fromPath(HttpMethod.GET, "/replaced");
+				Request effectiveRequest = originalRequest.copy().finish();
+				MarshaledResponse attempted = MarshaledResponse.withStatusCode(200).stream(stream -> {}).build();
+				var handle = new TestStreamingResponseHandle(originalRequest, null, attempted, Instant.now());
+				var termination = StreamTermination.with(StreamTerminationReason.BACKPRESSURE, Duration.ZERO).build();
+				observer.didStartRequestHandling(ServerType.HTTP, originalRequest, null);
+				observer.willWriteResponse(ServerType.HTTP, effectiveRequest, null, attempted);
+				if (terminationFirst) observer.didTerminateResponseStream(handle, termination);
+				observer.didFinishRequestHandling(ServerType.HTTP, originalRequest, null,
+						MarshaledResponse.fromStatusCode(503), Duration.ofMillis(4), List.of());
+				if (!terminationFirst) observer.didTerminateResponseStream(handle, termination);
+				SpanData span = onlySpan(harness);
+				Assertions.assertEquals(503L, span.getAttributes().get(STATUS_CODE_ATTRIBUTE_KEY));
+				Assertions.assertEquals(StatusCode.ERROR, span.getStatus().getStatusCode());
+				Assertions.assertNull(span.getAttributes().get(STREAM_TERMINATION_REASON_ATTRIBUTE_KEY));
+				Assertions.assertEquals(0, observer.getActiveSpanCount());
+			} finally { harness.openTelemetrySdk().close(); }
+		}
+	}
+
+	@Test
+	public void routineHttpAndSseTerminationCausesDoNotBecomeServerErrors() throws Exception {
+		for (StreamTerminationReason reason : List.of(StreamTerminationReason.CLIENT_DISCONNECTED,
+				StreamTerminationReason.CLIENT_CANCELED, StreamTerminationReason.SERVER_STOPPING,
+				StreamTerminationReason.APPLICATION_CANCELED)) {
+			for (boolean sse : List.of(false, true)) {
+				TestHarness harness = TestHarness.create();
+				try (OpenTelemetryLifecycleObserver observer = OpenTelemetryLifecycleObserver
+						.withOpenTelemetry(harness.openTelemetrySdk()).build()) {
+					Request request = Request.fromPath(HttpMethod.GET, "/stream");
+					var cause = new java.io.IOException("routine close");
+					var termination = StreamTermination.with(reason, Duration.ZERO).cause(cause).build();
+					if (sse) {
+						var connection = new TestSseConnection(request,
+								createResourceMethod(HttpMethod.GET, "/events", "events"), Instant.now());
+						observer.didEstablishSseConnection(connection);
+						observer.didFailToWriteSseEvent(connection, SseEvent.withData("private payload").build(), Duration.ZERO, cause);
+						observer.didFailToWriteSseComment(connection, com.soklet.SseComment.heartbeatInstance(), Duration.ZERO, cause);
+						observer.didTerminateSseConnection(connection, termination);
+					} else {
+						MarshaledResponse response = MarshaledResponse.withStatusCode(200).stream(stream -> {}).build();
+						observer.didStartRequestHandling(ServerType.HTTP, request, null);
+						var handle = new TestStreamingResponseHandle(request, null, response, Instant.now());
+						observer.willWriteResponseStream(handle);
+						observer.didFinishRequestHandling(ServerType.HTTP, request, null, response, Duration.ZERO, List.of());
+						observer.didTerminateResponseStream(handle, termination);
+					}
+					SpanData span = onlySpan(harness);
+					Assertions.assertEquals(StatusCode.UNSET, span.getStatus().getStatusCode());
+					Assertions.assertNull(span.getAttributes().get(ERROR_TYPE_ATTRIBUTE_KEY));
+					Assertions.assertTrue(span.getEvents().isEmpty());
+					Assertions.assertEquals(0, observer.getActiveSpanCount());
+				} finally { harness.openTelemetrySdk().close(); }
+			}
+		}
+	}
+
 	@Test
 	public void rejectedUnroutedHttpStreamExportsOne503SpanAndLeavesNoActiveSpans() throws Exception {
 		TestHarness harness = TestHarness.create();
@@ -375,6 +579,7 @@ public class OpenTelemetryLifecycleObserverTests {
 		observer.didStartRequestHandling(ServerType.HTTP, request, resourceMethod);
 		Instant establishedAt = Instant.now();
 		TestStreamingResponseHandle stream = new TestStreamingResponseHandle(request, resourceMethod, response, establishedAt);
+		observer.willWriteResponseStream(stream);
 		observer.didFinishRequestHandling(ServerType.HTTP, request, resourceMethod, response, Duration.ofMillis(1), List.of());
 
 		Assertions.assertEquals(List.of(), harness.spanExporter().getFinishedSpanItems());
@@ -625,8 +830,10 @@ public class OpenTelemetryLifecycleObserverTests {
 			MarshaledResponse response = MarshaledResponse.withStatusCode(200)
 					.streamingResponseBody(StreamingResponseBody.fromWriter(responseStream -> {})).build();
 			observer.didStartRequestHandling(ServerType.HTTP, request, null);
+			var handle = new TestStreamingResponseHandle(request, resourceMethod, response, Instant.now());
+			observer.willWriteResponseStream(handle);
 			observer.didFinishRequestHandling(ServerType.HTTP, request, null, response, Duration.ZERO, List.of());
-			observer.didTerminateResponseStream(new TestStreamingResponseHandle(request, resourceMethod, response, Instant.now()),
+			observer.didTerminateResponseStream(handle,
 					StreamTermination.with(StreamTerminationReason.CLIENT_CANCELED, Duration.ZERO).build());
 			SpanData span = onlySpan(harness);
 			Assertions.assertNotEquals(StatusCode.ERROR, span.getStatus().getStatusCode());
@@ -651,8 +858,10 @@ public class OpenTelemetryLifecycleObserverTests {
 				MarshaledResponse response = MarshaledResponse.withStatusCode(200)
 						.streamingResponseBody(StreamingResponseBody.fromWriter(responseStream -> {})).build();
 				observer.didStartRequestHandling(ServerType.HTTP, request, null);
+			var handle = new TestStreamingResponseHandle(request, resourceMethod, response, Instant.now());
+			observer.willWriteResponseStream(handle);
 				observer.didFinishRequestHandling(ServerType.HTTP, request, null, response, Duration.ZERO, List.of());
-				observer.didTerminateResponseStream(new TestStreamingResponseHandle(request, resourceMethod, response, Instant.now()),
+				observer.didTerminateResponseStream(handle,
 						StreamTermination.with(reason, Duration.ZERO).build());
 				SpanData span = onlySpan(harness);
 				Assertions.assertEquals(StatusCode.ERROR, span.getStatus().getStatusCode());
@@ -699,7 +908,9 @@ public class OpenTelemetryLifecycleObserverTests {
 			MarshaledResponse response = MarshaledResponse.withStatusCode(200)
 					.streamingResponseBody(StreamingResponseBody.fromWriter(responseStream -> {})).build();
 			observer.didStartRequestHandling(ServerType.HTTP, request, method);
-			observer.didTerminateResponseStream(new TestStreamingResponseHandle(request, method, response, Instant.now()),
+			var handle = new TestStreamingResponseHandle(request, method, response, Instant.now());
+			observer.willWriteResponseStream(handle);
+			observer.didTerminateResponseStream(handle,
 					StreamTermination.with(StreamTerminationReason.COMPLETED, Duration.ZERO).build());
 			Assertions.assertEquals(1, observer.getActiveSpanCount());
 			Assertions.assertTrue(harness.spanExporter().getFinishedSpanItems().isEmpty());

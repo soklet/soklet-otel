@@ -228,7 +228,7 @@ public final class OpenTelemetryMetricsCollector implements MetricsCollector {
 	@NonNull
 	private final LongUpDownCounter activeRequestsCounter;
 	private final LongCounter responseStreamTerminationsCounter;
-	private final Map<Request, Attributes> responseStreamsInFlight = Collections.synchronizedMap(new IdentityHashMap<>());
+	private final Map<Request, HttpStreamState> responseStreamsInFlight = Collections.synchronizedMap(new IdentityHashMap<>());
 	@NonNull
 	private final DoubleHistogram requestDurationHistogram;
 	@NonNull
@@ -824,6 +824,16 @@ public final class OpenTelemetryMetricsCollector implements MetricsCollector {
 	}
 
 	@Override
+	public void willWriteResponseStream(@NonNull StreamingResponseHandle streamingResponseHandle) {
+		requireNonNull(streamingResponseHandle);
+		if (streamingResponseHandle.getServerType() != ServerType.HTTP) return;
+		synchronized (this.responseStreamsInFlight) {
+			this.responseStreamsInFlight.putIfAbsent(streamingResponseHandle.getRequest(),
+					new HttpStreamState(streamingResponseHandle));
+		}
+	}
+
+	@Override
 	public void didFinishRequestHandling(@NonNull ServerType serverType,
 																			 @NonNull Request request,
 																			 @Nullable ResourceMethod resourceMethod,
@@ -839,9 +849,18 @@ public final class OpenTelemetryMetricsCollector implements MetricsCollector {
 		Throwable throwable = throwables.isEmpty() ? null : throwables.get(0);
 		Attributes attributes = requestAttributes(serverType, request, resourceMethod, marshaledResponse.getStatusCode(), throwable);
 
-		boolean streaming = serverType == ServerType.HTTP && marshaledResponse.isStreaming();
-		if (streaming) this.responseStreamsInFlight.put(request, attributes);
-		else {
+		boolean streaming = false;
+		HttpStreamCompletion completion = null;
+		synchronized (this.responseStreamsInFlight) {
+			HttpStreamState state = this.responseStreamsInFlight.get(request);
+			if (state != null && serverType == ServerType.HTTP && marshaledResponse.isStreaming()) {
+				streaming = true;
+				state.attributes = attributes;
+				completion = state.completion;
+				if (completion != null) this.responseStreamsInFlight.remove(request);
+			} else this.responseStreamsInFlight.remove(request);
+		}
+		if (!streaming) {
 			this.activeRequestsCounter.add(-1, activeRequestAttributes(serverType, request));
 			this.requestDurationHistogram.record(seconds(duration), attributes);
 		}
@@ -857,6 +876,7 @@ public final class OpenTelemetryMetricsCollector implements MetricsCollector {
 
 		if (!throwables.isEmpty())
 			this.requestThrowableCounter.add(throwables.size(), attributes);
+		if (completion != null) recordHttpStreamCompletion(completion, attributes);
 	}
 
 	@Override
@@ -870,14 +890,35 @@ public final class OpenTelemetryMetricsCollector implements MetricsCollector {
 		if (responseBodySizeInBytes < 0L) throw new IllegalArgumentException("Response body size must be nonnegative.");
 		if (streamingResponseHandle.getServerType() != ServerType.HTTP) return;
 		Request request = streamingResponseHandle.getRequest();
-		Attributes attributes = this.responseStreamsInFlight.remove(request);
-		if (attributes == null) return;
+		HttpStreamCompletion completion = new HttpStreamCompletion(streamingResponseHandle,
+				streamTermination, requestDuration, responseBodySizeInBytes);
+		Attributes attributes;
+		synchronized (this.responseStreamsInFlight) {
+			HttpStreamState state = this.responseStreamsInFlight.get(request);
+			if (state == null || state.handle != streamingResponseHandle || state.completion != null) return;
+			attributes = state.attributes;
+			if (attributes == null) { state.completion = completion; return; }
+			this.responseStreamsInFlight.remove(request);
+		}
+		recordHttpStreamCompletion(completion, attributes);
+	}
+
+	private void recordHttpStreamCompletion(@NonNull HttpStreamCompletion completion,
+			@NonNull Attributes attributes) {
+		StreamingResponseHandle streamingResponseHandle = completion.handle();
+		StreamTermination streamTermination = completion.termination();
+		Request request = streamingResponseHandle.getRequest();
 		Throwable cause = streamTermination.getCause().orElse(null);
-		if (attributes.get(ERROR_TYPE_ATTRIBUTE_KEY) == null && cause != null)
+		boolean failure = switch (streamTermination.getReason()) {
+			case COMPLETED, CLIENT_DISCONNECTED, CLIENT_CANCELED, SERVER_STOPPING, APPLICATION_CANCELED -> false;
+			case PROTOCOL_UNSUPPORTED, RESPONSE_TIMEOUT, RESPONSE_IDLE_TIMEOUT, CLEANUP_TIMEOUT,
+					BACKPRESSURE, WRITE_FAILED, PRODUCER_FAILED, INTERNAL_ERROR, SIMULATOR_LIMIT_EXCEEDED, UNKNOWN -> true;
+		};
+		if (failure && attributes.get(ERROR_TYPE_ATTRIBUTE_KEY) == null && cause != null)
 			attributes = attributes.toBuilder().put(ERROR_TYPE_ATTRIBUTE_KEY, cause.getClass().getName()).build();
 		this.activeRequestsCounter.add(-1, activeRequestAttributes(ServerType.HTTP, request));
-		this.requestDurationHistogram.record(seconds(requestDuration), attributes);
-		this.responseBodySizeHistogram.record(responseBodySizeInBytes, attributes);
+		this.requestDurationHistogram.record(seconds(completion.requestDuration()), attributes);
+		this.responseBodySizeHistogram.record(completion.responseBodySizeInBytes(), attributes);
 		int statusCode = streamingResponseHandle.getMarshaledResponse().getStatusCode();
 		this.responseStreamTerminationsCounter.add(1, Attributes.builder()
 				.put(HTTP_METHOD_ATTRIBUTE_KEY, request.getHttpMethod().name())
@@ -885,6 +926,17 @@ public final class OpenTelemetryMetricsCollector implements MetricsCollector {
 				.put("soklet.http.status_class", statusCode >= 100 && statusCode <= 599 ? (statusCode / 100) + "xx" : "other")
 				.put("soklet.http.response.stream.termination.reason", streamTermination.getReason().name()).build());
 	}
+
+	private static final class HttpStreamState {
+		private final @NonNull StreamingResponseHandle handle;
+		private @Nullable Attributes attributes;
+		private @Nullable HttpStreamCompletion completion;
+		private HttpStreamState(@NonNull StreamingResponseHandle handle) { this.handle = handle; }
+	}
+
+	private record HttpStreamCompletion(@NonNull StreamingResponseHandle handle,
+			@NonNull StreamTermination termination, @NonNull Duration requestDuration,
+			@NonNull Long responseBodySizeInBytes) {}
 
 	@Override
 	public void didWriteResponse(@NonNull ServerType serverType,

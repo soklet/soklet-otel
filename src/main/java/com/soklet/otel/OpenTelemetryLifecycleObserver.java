@@ -272,13 +272,15 @@ public final class OpenTelemetryLifecycleObserver implements LifecycleObserver, 
 	}
 
 	@Override
-	public void willWriteResponse(@NonNull ServerType serverType, @NonNull Request request,
-			@Nullable ResourceMethod resourceMethod, @NonNull MarshaledResponse marshaledResponse) {
-		requireNonNull(serverType); requireNonNull(request); requireNonNull(marshaledResponse);
-		if (!marshaledResponse.isStreaming()) return;
-		SpanState state = this.httpRequestSpans.get(new IdentityKey<>(request));
+	public void willWriteResponseStream(@NonNull StreamingResponseHandle streamingResponseHandle) {
+		requireNonNull(streamingResponseHandle);
+		if (streamingResponseHandle.getServerType() != ServerType.HTTP) return;
+		SpanState state = this.httpRequestSpans.get(new IdentityKey<>(streamingResponseHandle.getRequest()));
 		if (state != null) {
-			synchronized (state) { state.httpStreamAttempted = true; }
+			synchronized (state) {
+				if (!state.httpHandlingFinished && state.httpStreamHandle == null)
+					state.httpStreamHandle = streamingResponseHandle;
+			}
 		}
 	}
 
@@ -309,13 +311,14 @@ public final class OpenTelemetryLifecycleObserver implements LifecycleObserver, 
 				if (spanState.httpHandlingFinished)
 					return;
 				spanState.httpHandlingFinished = true;
-				boolean keepOpen = marshaledResponse.isStreaming() && this.spanPolicy.recordStreamingResponseSpans();
-				if (!marshaledResponse.isStreaming() && spanState.httpStreamAttempted)
+				boolean keepOpen = marshaledResponse.isStreaming() && spanState.httpStreamHandle != null
+						&& this.spanPolicy.recordStreamingResponseSpans();
+				if (!keepOpen)
 					recordFiniteStreamCompletion(request);
 				try {
 					applyHttpFinish(spanState.span(), resourceMethod, marshaledResponse, throwables);
 				} finally {
-					if (spanState.pendingHttpStreamTermination != null) {
+					if (keepOpen && spanState.pendingHttpStreamTermination != null) {
 						finishHttpStream(key, spanState, spanState.pendingHttpStreamTermination,
 								requireNonNull(spanState.httpStreamFinishedAt));
 					} else if (!keepOpen && this.httpRequestSpans.remove(key, spanState)) {
@@ -408,7 +411,7 @@ public final class OpenTelemetryLifecycleObserver implements LifecycleObserver, 
 			SpanState spanState = this.httpRequestSpans.get(key);
 			Instant finishedAt = streamingResponseHandle.getEstablishedAt().plus(streamTermination.getDuration());
 			if (spanState == null) {
-				if (hasFiniteStreamCompletion(streamingResponseHandle.getRequest())) return;
+				if (!recordFiniteStreamCompletion(streamingResponseHandle.getRequest())) return;
 				SpanState backfilled = backfilledStreamingSpan(streamingResponseHandle);
 				try {
 					applyHttpFinish(backfilled.span(), streamingResponseHandle.getResourceMethod().orElse(null),
@@ -420,7 +423,8 @@ public final class OpenTelemetryLifecycleObserver implements LifecycleObserver, 
 				return;
 			}
 			synchronized (spanState) {
-				if (spanState.pendingHttpStreamTermination != null)
+				if (spanState.httpStreamHandle != streamingResponseHandle
+						|| spanState.pendingHttpStreamTermination != null)
 					return;
 				// Transport completion can precede the synchronous handling-finish callback.
 				// Preserve both observations; do not end before HTTP status/throwables arrive.
@@ -434,6 +438,7 @@ public final class OpenTelemetryLifecycleObserver implements LifecycleObserver, 
 
 	private void finishHttpStream(@NonNull IdentityKey<Request> key, @NonNull SpanState state,
 			@NonNull StreamTermination termination, @NonNull Instant finishedAt) {
+		recordFiniteStreamCompletion(requireNonNull(state.httpStreamHandle).getRequest());
 		if (!this.httpRequestSpans.remove(key, state))
 			return;
 		try {
@@ -516,8 +521,14 @@ public final class OpenTelemetryLifecycleObserver implements LifecycleObserver, 
 		safelyRun(() -> {
 			SpanState spanState = this.sseConnectionSpans.get(new IdentityKey<>(sseConnection));
 
-			if (spanState != null)
-				recordException(spanState.span(), throwable);
+			if (spanState != null) {
+				synchronized (spanState) {
+					// A socket write failure may be a routine client disconnect. The
+					// terminal reason decides whether it is a server error.
+					if (spanState.pendingSseWriteFailure == null)
+						spanState.pendingSseWriteFailure = throwable;
+				}
+			}
 		});
 	}
 
@@ -558,8 +569,14 @@ public final class OpenTelemetryLifecycleObserver implements LifecycleObserver, 
 		safelyRun(() -> {
 			SpanState spanState = this.sseConnectionSpans.get(new IdentityKey<>(sseConnection));
 
-			if (spanState != null)
-				recordException(spanState.span(), throwable);
+			if (spanState != null) {
+				synchronized (spanState) {
+					// A socket write failure may be a routine client disconnect. The
+					// terminal reason decides whether it is a server error.
+					if (spanState.pendingSseWriteFailure == null)
+						spanState.pendingSseWriteFailure = throwable;
+				}
+			}
 		});
 	}
 
@@ -578,10 +595,16 @@ public final class OpenTelemetryLifecycleObserver implements LifecycleObserver, 
 			if (spanState == null)
 				return;
 
-			try {
-				applyStreamTermination(spanState.span(), streamTermination);
-			} finally {
-				endSpanSafely(spanState.span(), sseConnection.getEstablishedAt().plus(streamTermination.getDuration()));
+			synchronized (spanState) {
+				try {
+					applyStreamTermination(spanState.span(), streamTermination);
+					if (isError(streamTermination) && streamTermination.getCause().isEmpty()
+							&& spanState.pendingSseWriteFailure != null)
+						recordException(spanState.span(), spanState.pendingSseWriteFailure);
+				} finally {
+					spanState.pendingSseWriteFailure = null;
+					endSpanSafely(spanState.span(), sseConnection.getEstablishedAt().plus(streamTermination.getDuration()));
+				}
 			}
 		});
 	}
@@ -667,9 +690,8 @@ public final class OpenTelemetryLifecycleObserver implements LifecycleObserver, 
 		requireNonNull(termination);
 
 		span.setAttribute(STREAM_TERMINATION_REASON_ATTRIBUTE_KEY, enumValue(termination.getReason()));
-		termination.getCause().ifPresent(throwable -> recordException(span, throwable));
-
 		if (isError(termination)) {
+			termination.getCause().ifPresent(throwable -> recordException(span, throwable));
 			if (termination.getCause().isEmpty())
 				span.setAttribute(ERROR_TYPE_ATTRIBUTE_KEY, enumValue(termination.getReason()));
 			span.setStatus(StatusCode.ERROR);
@@ -678,9 +700,6 @@ public final class OpenTelemetryLifecycleObserver implements LifecycleObserver, 
 
 	private boolean isError(@NonNull StreamTermination termination) {
 		requireNonNull(termination);
-
-		if (termination.getCause().isPresent())
-			return true;
 
 		return switch (termination.getReason()) {
 			case COMPLETED, CLIENT_DISCONNECTED, CLIENT_CANCELED, SERVER_STOPPING, APPLICATION_CANCELED -> false;
@@ -1011,17 +1030,10 @@ public final class OpenTelemetryLifecycleObserver implements LifecycleObserver, 
 		}
 	}
 
-	private void recordFiniteStreamCompletion(Request request) {
+	private boolean recordFiniteStreamCompletion(Request request) {
 		synchronized (this.completedFiniteStreamRequests) {
 			clearCollectedFiniteStreamRequests();
-			this.completedFiniteStreamRequests.add(new CompletedStreamRequest(request, this.completedFiniteStreamRequestQueue));
-		}
-	}
-
-	private boolean hasFiniteStreamCompletion(Request request) {
-		synchronized (this.completedFiniteStreamRequests) {
-			clearCollectedFiniteStreamRequests();
-			return this.completedFiniteStreamRequests.contains(new CompletedStreamRequest(request, null));
+			return this.completedFiniteStreamRequests.add(new CompletedStreamRequest(request, this.completedFiniteStreamRequestQueue));
 		}
 	}
 
@@ -1049,9 +1061,11 @@ public final class OpenTelemetryLifecycleObserver implements LifecycleObserver, 
 		private final @NonNull Instant startedAt;
 		// HTTP completion state is accessed only while synchronized on this SpanState.
 		private boolean httpHandlingFinished;
-		private boolean httpStreamAttempted;
+		private @Nullable StreamingResponseHandle httpStreamHandle;
 		private @Nullable StreamTermination pendingHttpStreamTermination;
 		private @Nullable Instant httpStreamFinishedAt;
+		// At most one failure, classified when the SSE lifetime ends.
+		private @Nullable Throwable pendingSseWriteFailure;
 
 		private SpanState(@NonNull Span span, @NonNull Instant startedAt) {
 			this.span = requireNonNull(span);

@@ -83,6 +83,84 @@ import static java.util.Objects.requireNonNull;
  * @author <a href="https://www.revetkn.com">Mark Allen</a>
  */
 public class OpenTelemetryMetricsCollectorTests {
+	@Test
+	public void customStreamCompletionRequiresPreparationAndIsIndependentOfCallbackOrder() throws Exception {
+		for (var strategy : OpenTelemetryMetricsCollector.MetricNamingStrategy.values()) {
+			for (boolean prepared : List.of(false, true)) {
+				for (boolean terminalFirst : List.of(false, true)) {
+					TestHarness harness = TestHarness.create();
+					try {
+						var collector = OpenTelemetryMetricsCollector.withMeter(harness.openTelemetrySdk().getMeter("custom"))
+								.metricNamingStrategy(strategy).build();
+						Request request = Request.fromPath(HttpMethod.GET, "/custom-stream");
+						MarshaledResponse response = MarshaledResponse.withStatusCode(200).stream(stream -> {}).build();
+						var handle = new com.soklet.StreamingResponseHandle() {
+							@Override public ServerType getServerType() { return ServerType.HTTP; }
+							@Override public Request getRequest() { return request; }
+							@Override public Optional<ResourceMethod> getResourceMethod() { return Optional.empty(); }
+							@Override public MarshaledResponse getMarshaledResponse() { return response; }
+							@Override public Instant getEstablishedAt() { return Instant.now(); }
+						};
+						var termination = StreamTermination.with(StreamTerminationReason.COMPLETED, Duration.ZERO).build();
+						collector.didStartRequestHandling(ServerType.HTTP, request, null);
+						if (prepared) collector.willWriteResponseStream(handle);
+						if (terminalFirst) collector.didTerminateResponseStream(handle, termination, Duration.ofMillis(125), 7L);
+						collector.didFinishRequestHandling(ServerType.HTTP, request, null, response, Duration.ofMillis(2), List.of());
+						if (!terminalFirst) collector.didTerminateResponseStream(handle, termination, Duration.ofMillis(125), 7L);
+						collector.didTerminateResponseStream(handle, termination, Duration.ofMillis(250), 99L);
+						boolean semconv = strategy == OpenTelemetryMetricsCollector.MetricNamingStrategy.SEMCONV;
+						var metrics = harness.metricReader().collectAllMetrics();
+						String duration = semconv ? "http.server.request.duration" : "soklet.server.request.duration";
+						Assertions.assertEquals(0L, longSumValue(metrics,
+								semconv ? "http.server.active_requests" : "soklet.server.requests.active", a -> true));
+						Assertions.assertEquals(1L, histogramCount(metrics, duration, a -> true));
+						Assertions.assertEquals(prepared ? .125D : .002D, histogramSum(metrics, duration, a -> true), .000001D);
+					} finally { harness.openTelemetrySdk().close(); }
+				}
+			}
+		}
+	}
+
+	@Test
+	public void routineStreamCloseDoesNotAddErrorTypeToDurationMetrics() throws Exception {
+		for (var strategy : OpenTelemetryMetricsCollector.MetricNamingStrategy.values()) {
+			for (StreamTerminationReason reason : List.of(StreamTerminationReason.CLIENT_DISCONNECTED,
+					StreamTerminationReason.CLIENT_CANCELED, StreamTerminationReason.SERVER_STOPPING,
+					StreamTerminationReason.APPLICATION_CANCELED, StreamTerminationReason.WRITE_FAILED)) {
+				TestHarness harness = TestHarness.create();
+				try {
+					var collector = OpenTelemetryMetricsCollector.withMeter(harness.openTelemetrySdk().getMeter("close-http"))
+						.metricNamingStrategy(strategy).build();
+					Request request = Request.fromPath(HttpMethod.GET, "/stream");
+					MarshaledResponse response = MarshaledResponse.withStatusCode(200).stream(stream -> {}).build();
+					collector.didStartRequestHandling(ServerType.HTTP, request, null);
+					var handle = new com.soklet.StreamingResponseHandle() {
+						@Override public ServerType getServerType() { return ServerType.HTTP; }
+						@Override public Request getRequest() { return request; }
+						@Override public Optional<ResourceMethod> getResourceMethod() { return Optional.empty(); }
+						@Override public MarshaledResponse getMarshaledResponse() { return response; }
+						@Override public Instant getEstablishedAt() { return Instant.now(); }
+					};
+					collector.willWriteResponseStream(handle);
+					collector.didFinishRequestHandling(ServerType.HTTP, request, null, response, Duration.ZERO, List.of());
+					collector.didTerminateResponseStream(handle,
+						StreamTermination.with(reason, Duration.ZERO).cause(new java.io.IOException("close")).build(),
+						Duration.ofMillis(10), 1L);
+					boolean semconv = strategy == OpenTelemetryMetricsCollector.MetricNamingStrategy.SEMCONV;
+					String duration = semconv ? "http.server.request.duration" : "soklet.server.request.duration";
+					var metrics = harness.metricReader().collectAllMetrics();
+					var data = metrics.stream().filter(metric -> metric.getName().equals(duration)).findFirst().orElseThrow();
+					var points = data.getHistogramData().getPoints();
+					Assertions.assertEquals(1, points.size());
+					String errorType = points.iterator().next().getAttributes().get(ERROR_TYPE_ATTRIBUTE_KEY);
+					Assertions.assertEquals(reason == StreamTerminationReason.WRITE_FAILED ? "java.io.IOException" : null, errorType);
+					Assertions.assertEquals(0L, longSumValue(metrics,
+						semconv ? "http.server.active_requests" : "soklet.server.requests.active", attributes -> true));
+				} finally { harness.openTelemetrySdk().close(); }
+			}
+		}
+	}
+
 	private static final AttributeKey<String> HTTP_METHOD_ATTRIBUTE_KEY = AttributeKey.stringKey("http.request.method");
 	private static final AttributeKey<String> SERVER_TYPE_ATTRIBUTE_KEY = AttributeKey.stringKey("soklet.server.type");
 	private static final AttributeKey<String> FAILURE_REASON_ATTRIBUTE_KEY = AttributeKey.stringKey("soklet.failure.reason");
@@ -124,6 +202,14 @@ public class OpenTelemetryMetricsCollectorTests {
 			Request request = Request.withPath(HttpMethod.GET, "/streams/private-path-canary").build();
 			MarshaledResponse response = MarshaledResponse.withStatusCode(200).stream(stream -> {}).build();
 			collector.didStartRequestHandling(ServerType.HTTP, request, method);
+			com.soklet.StreamingResponseHandle handle = new com.soklet.StreamingResponseHandle() {
+				@Override public ServerType getServerType() { return ServerType.HTTP; }
+				@Override public Request getRequest() { return request; }
+				@Override public Optional<ResourceMethod> getResourceMethod() { return Optional.of(method); }
+				@Override public MarshaledResponse getMarshaledResponse() { return response; }
+				@Override public Instant getEstablishedAt() { return Instant.now(); }
+			};
+			collector.willWriteResponseStream(handle);
 			collector.didFinishRequestHandling(ServerType.HTTP, request, method, response, Duration.ofMillis(2), List.of());
 			boolean semconv = strategy == OpenTelemetryMetricsCollector.MetricNamingStrategy.SEMCONV;
 			String active = semconv ? "http.server.active_requests" : "soklet.server.requests.active";
@@ -132,13 +218,7 @@ public class OpenTelemetryMetricsCollectorTests {
 			var live = harness.metricReader().collectAllMetrics();
 			Assertions.assertEquals(1L, longSumValue(live, active, a -> true));
 			Assertions.assertTrue(live.stream().noneMatch(metric -> duration.equals(metric.getName()) || body.equals(metric.getName())));
-			com.soklet.StreamingResponseHandle handle = new com.soklet.StreamingResponseHandle() {
-				@Override public ServerType getServerType() { return ServerType.HTTP; }
-				@Override public Request getRequest() { return request; }
-				@Override public Optional<ResourceMethod> getResourceMethod() { return Optional.of(method); }
-				@Override public MarshaledResponse getMarshaledResponse() { return response; }
-				@Override public Instant getEstablishedAt() { return Instant.now(); }
-			};
+
 			StreamTermination termination = StreamTermination.with(StreamTerminationReason.PRODUCER_FAILED, Duration.ofMillis(10)).build();
 			collector.didTerminateResponseStream(handle, termination, Duration.ofMillis(125), 7L);
 			collector.didTerminateResponseStream(handle, termination, Duration.ofMillis(250), 99L);
