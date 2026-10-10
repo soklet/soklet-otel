@@ -403,25 +403,6 @@ session instruments, session events, or request-stream spans.
 naming hook and has a default implementation, so custom strategies do not need
 to implement it.
 
-### 2.0.0 verification
-
-The modern span contract is frozen by these eight focused methods in
-`OpenTelemetryMcpLifecycleObserverTests`:
-
-- `mcpMetadataTraceContextIsTheOnlyRemoteParentAndPreservesTraceState`
-- `mcpSpanUsesExactDefaultAndCustomNamesAttributesAndTerminalSemantics`
-- `allMcpRequestOutcomesMapToExactStatusAndErrorVocabulary`
-- `mcpRequestSpanStaysOpenUntilTerminalFinishAcrossStreamAndSubscriptionLifetimes`
-- `mcpPolicyAndNamingAreModernAdditiveAndLegacySessionControlsRemainAbsent`
-- `mcpTelemetryFailuresAreContainedAndReleaseStateExactlyOnce`
-- `concurrentMcpSpansRemainContextIsolatedAndCloseDrainsEveryState`
-- `mcpSpanProjectionExcludesSensitiveContextAndHttpFallbackCanaries`
-
-`OpenTelemetryLifecycleObserverTests#legacyMcpSessionTracingSurfacesRemainAbsentAndModernRequestCallbacksAreImplemented`
-freezes the public removal/addition boundary. The release verification contract runs the full test suite on
-JDK 17, 21, and 25 and builds the package, sources, attached Javadocs, and standalone Javadocs against exact
-Soklet 4.0.0.
-
 ## Notes
 
 - The collector is thread-safe and designed for callback hot paths (no I/O or blocking operations in callback methods).

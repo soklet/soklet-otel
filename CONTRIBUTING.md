@@ -35,6 +35,17 @@ defaults to that reviewed, retrievable commit and obtain a green matrix. An
 existing pin does not validate later uncommitted core changes; integrations that
 use newer core APIs may fail until the owner advances that pin.
 
+#### MCP Telemetry Tests
+
+`OpenTelemetryMcpLifecycleObserverTests` and `OpenTelemetryLifecycleObserverTests`
+cover remote-parent selection, span names and attributes, terminal outcomes,
+stream and subscription lifetimes, sensitive-field exclusion, concurrent context
+isolation, and cleanup after telemetry failures. Run the focused tests with:
+
+```shell
+mvn -Dtest=OpenTelemetryMcpLifecycleObserverTests,OpenTelemetryLifecycleObserverTests test
+```
+
 #### Reproducible Javadoc and Packaging
 
 Compilation and runtime compatibility still target Java 17. Documentation uses
