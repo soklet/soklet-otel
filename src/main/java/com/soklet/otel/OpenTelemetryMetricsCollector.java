@@ -76,6 +76,9 @@ import static java.util.Objects.requireNonNull;
  * payload bytes; response-write duration still describes handoff. The separate
  * {@code soklet.http.response.stream.terminations} counter uses configured routes, status classes and uppercase
  * terminal reasons. Only active admitted stream state is retained, by dispatch request identity.
+ * Failed stream duration/body-size measurements without an existing {@code error.type} use the
+ * cause's class name when present, otherwise the lower-snake termination reason. Routine client
+ * cancellation, disconnect, and server shutdown do not add an error type.
  * The {@code soklet.server.type} attribute uses the same explicit {@code http}, {@code sse}, and
  * {@code mcp} vocabulary as spans. In 2.0.0, HTTP metric values change from {@code standard_http}
  * to {@code http}, including connection, acceptance, read-failure, and transport-failure metrics
@@ -914,8 +917,9 @@ public final class OpenTelemetryMetricsCollector implements MetricsCollector {
 			case PROTOCOL_UNSUPPORTED, RESPONSE_TIMEOUT, RESPONSE_IDLE_TIMEOUT, CLEANUP_TIMEOUT,
 					BACKPRESSURE, WRITE_FAILED, PRODUCER_FAILED, INTERNAL_ERROR, SIMULATOR_LIMIT_EXCEEDED, UNKNOWN -> true;
 		};
-		if (failure && attributes.get(ERROR_TYPE_ATTRIBUTE_KEY) == null && cause != null)
-			attributes = attributes.toBuilder().put(ERROR_TYPE_ATTRIBUTE_KEY, cause.getClass().getName()).build();
+		if (failure && attributes.get(ERROR_TYPE_ATTRIBUTE_KEY) == null)
+			attributes = attributes.toBuilder().put(ERROR_TYPE_ATTRIBUTE_KEY,
+					cause != null ? cause.getClass().getName() : enumValue(streamTermination.getReason())).build();
 		this.activeRequestsCounter.add(-1, activeRequestAttributes(ServerType.HTTP, request));
 		this.requestDurationHistogram.record(seconds(completion.requestDuration()), attributes);
 		this.responseBodySizeHistogram.record(completion.responseBodySizeInBytes(), attributes);
