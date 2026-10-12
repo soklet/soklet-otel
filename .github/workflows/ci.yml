@@ -9,10 +9,10 @@ on:
       soklet_ref:
         description: Exact 40-character Soklet commit SHA to validate (not a branch or tag)
         required: false
-        default: 1ff546ec59c2195f865e3ed2d3f7edb0e1d57e2d
+        default: 2e06bc346525e123ac0e3423f3aa94c709853205
 
 env:
-  SOKLET_CANDIDATE_SHA: ${{ inputs.soklet_ref || '1ff546ec59c2195f865e3ed2d3f7edb0e1d57e2d' }}
+  SOKLET_CANDIDATE_SHA: ${{ inputs.soklet_ref || '2e06bc346525e123ac0e3423f3aa94c709853205' }}
 
 permissions:
   contents: read
