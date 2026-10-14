@@ -86,6 +86,55 @@ import static java.util.Objects.requireNonNull;
  */
 public class OpenTelemetryLifecycleObserverTests {
 	@Test
+	public void overflowingHttpStreamTimestampStillEndsSpanInBothCallbackOrders() {
+		for (boolean terminalFirst : List.of(false, true)) {
+			TestHarness harness = TestHarness.create();
+			try (var observer = OpenTelemetryLifecycleObserver.withOpenTelemetry(harness.openTelemetrySdk()).build()) {
+				Request request = Request.fromPath(HttpMethod.GET, "/stream");
+				MarshaledResponse response = MarshaledResponse.withStatusCode(200).stream(stream -> {}).build();
+				var handle = new TestStreamingResponseHandle(request, null, response, Instant.now());
+				var termination = StreamTermination.with(StreamTerminationReason.COMPLETED, Duration.ofSeconds(Long.MAX_VALUE)).build();
+				observer.didStartRequestHandling(ServerType.HTTP, request, null);
+				observer.willWriteResponseStream(handle);
+				if (terminalFirst) observer.didTerminateResponseStream(handle, termination);
+				observer.didFinishRequestHandling(ServerType.HTTP, request, null, response, Duration.ZERO, List.of());
+				if (!terminalFirst) observer.didTerminateResponseStream(handle, termination);
+				Assertions.assertEquals(0, observer.getActiveSpanCount());
+				Assertions.assertEquals("completed", onlySpan(harness).getAttributes().get(STREAM_TERMINATION_REASON_ATTRIBUTE_KEY));
+			} finally { harness.openTelemetrySdk().close(); }
+		}
+	}
+
+	@Test
+	public void overflowingBackfilledHttpStreamTimestampStillEndsSpan() {
+		TestHarness harness = TestHarness.create();
+		try (var observer = OpenTelemetryLifecycleObserver.withOpenTelemetry(harness.openTelemetrySdk()).build()) {
+			Request request = Request.fromPath(HttpMethod.GET, "/stream");
+			var response = MarshaledResponse.withStatusCode(200).stream(stream -> {}).build();
+			var handle = new TestStreamingResponseHandle(request, null, response, Instant.now());
+			observer.didTerminateResponseStream(handle,
+					StreamTermination.with(StreamTerminationReason.COMPLETED, Duration.ofSeconds(Long.MAX_VALUE)).build());
+			Assertions.assertEquals(0, observer.getActiveSpanCount());
+			Assertions.assertEquals("completed", onlySpan(harness).getAttributes().get(STREAM_TERMINATION_REASON_ATTRIBUTE_KEY));
+		} finally { harness.openTelemetrySdk().close(); }
+	}
+
+	@Test
+	public void overflowingSseTimestampStillEndsSpan() throws Exception {
+		TestHarness harness = TestHarness.create();
+		try (var observer = OpenTelemetryLifecycleObserver.withOpenTelemetry(harness.openTelemetrySdk()).build()) {
+			Request request = Request.fromPath(HttpMethod.GET, "/events");
+			var resourceMethod = createResourceMethod(HttpMethod.GET, "/events", "events");
+			var connection = new TestSseConnection(request, resourceMethod, Instant.now());
+			observer.didEstablishSseConnection(connection);
+			observer.didTerminateSseConnection(connection,
+					StreamTermination.with(StreamTerminationReason.COMPLETED, Duration.ofSeconds(Long.MAX_VALUE)).build());
+			Assertions.assertEquals(0, observer.getActiveSpanCount());
+			Assertions.assertEquals("completed", onlySpan(harness).getAttributes().get(STREAM_TERMINATION_REASON_ATTRIBUTE_KEY));
+		} finally { harness.openTelemetrySdk().close(); }
+	}
+
+	@Test
 	@org.junit.jupiter.api.Timeout(15)
 	public void simulatedStreamSpanEndsAtTerminalTimeDespiteDelayedHandlingFinish() {
 		TestHarness harness = TestHarness.create();
@@ -941,6 +990,32 @@ public class OpenTelemetryLifecycleObserverTests {
 		SpanData span = onlySpan(harness);
 		Assertions.assertNull(span.getAttributes().get(STREAM_TERMINATION_REASON_ATTRIBUTE_KEY));
 		Assertions.assertEquals(Integer.valueOf(0), observer.getActiveSpanCount());
+	}
+
+	@Test
+	public void closeStillEndsSseSpanWhenShutdownAttributeFails() throws Exception {
+		var ended = new java.util.concurrent.atomic.AtomicInteger();
+		io.opentelemetry.api.trace.Span span = (io.opentelemetry.api.trace.Span)
+				java.lang.reflect.Proxy.newProxyInstance(getClass().getClassLoader(),
+						new Class<?>[]{io.opentelemetry.api.trace.Span.class}, (proxy, method, args) -> {
+					if (method.getName().equals("setAttribute")) throw new IllegalStateException("attribute unavailable");
+					if (method.getName().equals("end")) { ended.incrementAndGet(); return null; }
+					return proxy;
+				});
+		io.opentelemetry.api.trace.SpanBuilder builder = (io.opentelemetry.api.trace.SpanBuilder)
+				java.lang.reflect.Proxy.newProxyInstance(getClass().getClassLoader(),
+						new Class<?>[]{io.opentelemetry.api.trace.SpanBuilder.class}, (proxy, method, args) ->
+							method.getName().equals("startSpan") ? span : proxy);
+		try (var observer = OpenTelemetryLifecycleObserver.withTracer(name -> builder).build()) {
+			Request request = Request.fromPath(HttpMethod.GET, "/events");
+			ResourceMethod resource = createResourceMethod(HttpMethod.GET, "/events", "events");
+			observer.didEstablishSseConnection(new TestSseConnection(request, resource, Instant.now()));
+			Assertions.assertEquals(1, observer.getActiveSpanCount());
+			observer.close();
+			Assertions.assertEquals(0, observer.getActiveSpanCount());
+			Assertions.assertEquals(1, ended.get());
+		}
+		Assertions.assertEquals(1, ended.get());
 	}
 
 	private static Request tracedRequest(@NonNull HttpMethod httpMethod,

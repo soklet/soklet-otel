@@ -56,6 +56,7 @@ import java.net.InetSocketAddress;
 import java.lang.ref.ReferenceQueue;
 import java.lang.ref.WeakReference;
 import java.util.Set;
+import java.time.DateTimeException;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
@@ -408,7 +409,13 @@ public final class OpenTelemetryLifecycleObserver implements LifecycleObserver, 
 		safelyRun(() -> {
 			IdentityKey<Request> key = new IdentityKey<>(streamingResponseHandle.getRequest());
 			SpanState spanState = this.httpRequestSpans.get(key);
-			Instant finishedAt = streamingResponseHandle.getEstablishedAt().plus(streamTermination.getDuration());
+			Instant finishedAt;
+			try {
+				finishedAt = streamingResponseHandle.getEstablishedAt().plus(streamTermination.getDuration());
+			} catch (DateTimeException | ArithmeticException e) {
+				// Custom termination durations must not prevent span/state cleanup.
+				finishedAt = Instant.now();
+			}
 			if (spanState == null) {
 				if (!recordFiniteStreamCompletion(streamingResponseHandle.getRequest())) return;
 				SpanState backfilled = backfilledStreamingSpan(streamingResponseHandle);
@@ -602,7 +609,7 @@ public final class OpenTelemetryLifecycleObserver implements LifecycleObserver, 
 						recordException(spanState.span(), spanState.pendingSseWriteFailure);
 				} finally {
 					spanState.pendingSseWriteFailure = null;
-					endSpanSafely(spanState.span(), sseConnection.getEstablishedAt().plus(streamTermination.getDuration()));
+					endSpanSafely(spanState.span(), sseConnection.getEstablishedAt(), streamTermination.getDuration());
 				}
 			}
 		});
@@ -917,9 +924,12 @@ public final class OpenTelemetryLifecycleObserver implements LifecycleObserver, 
 		requireNonNull(spanState);
 
 		safelyRun(() -> {
-			// SERVER_STOPPING is operational shutdown, not a span error.
-			spanState.span().setAttribute(STREAM_TERMINATION_REASON_ATTRIBUTE_KEY, enumValue(StreamTerminationReason.SERVER_STOPPING));
-			spanState.span().end();
+			try {
+				// SERVER_STOPPING is operational shutdown, not a span error.
+				spanState.span().setAttribute(STREAM_TERMINATION_REASON_ATTRIBUTE_KEY, enumValue(StreamTerminationReason.SERVER_STOPPING));
+			} finally {
+				endSpanSafely(spanState.span());
+			}
 		});
 	}
 
