@@ -27,10 +27,10 @@ jobs:
     name: Test (JDK ${{ matrix.jdk }})
     runs-on: ubuntu-latest
     strategy:
-      # Do not cancel the 21/25 jobs if 17 fails — we want every JDK's result.
+      # Collect every supported JDK's result even if another matrix job fails.
       fail-fast: false
       matrix:
-        jdk: ['17', '21', '25']
+        jdk: ['21', '25']
     steps:
       - name: Check out soklet-otel
         uses: actions/checkout@v6

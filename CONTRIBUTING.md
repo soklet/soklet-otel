@@ -19,7 +19,7 @@ installing it. Signing and publication are separate, explicitly authorized steps
 
 #### Continuous Integration
 
-CI builds on JDK 17, 21, and 25 against the exact Soklet commit pinned in
+CI builds on JDK 21 and 25 against the exact Soklet commit pinned in
 `.github/workflows/ci.yml`. For a manual run, `soklet_ref` accepts a full lowercase
 40-character commit SHA, not a branch, tag, or abbreviated SHA. Update both the
 manual default and automatic fallback together when selecting a new candidate.
@@ -48,7 +48,7 @@ mvn -Dtest=OpenTelemetryMcpLifecycleObserverTests,OpenTelemetryLifecycleObserver
 
 #### Reproducible Javadoc and Packaging
 
-Compilation and runtime compatibility still target Java 17. Documentation uses
+Compilation and runtime compatibility target Java 21. Documentation uses
 the separately pinned Corretto **26.0.2.11.1** generator (runtime `26.0.2.1`).
 Before any Maven command that packages Javadoc, including `verify` or `install`,
 set `SOKLET_JAVADOC_HOME` to that JDK's home directory; keep `JAVA_HOME` on the
@@ -60,7 +60,7 @@ export SOKLET_JAVADOC_HOME=/absolute/path/to/corretto-26.0.2.11.1
 
 CI downloads and checksum-verifies the exact Linux documentation JDK without
 changing the test matrix's Java runtime. Canonical release builds compile on
-JDK 17 and invoke this JDK 26 Javadoc executable; rebuilds must match both pins.
+JDK 21 and invoke this JDK 26 Javadoc executable; rebuilds must match both pins.
 
 External package indexes are checked in under `src/main/javadoc/links`, with
 source archive and index checksums in `manifest.json`. Check them with

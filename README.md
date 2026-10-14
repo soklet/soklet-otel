@@ -30,7 +30,7 @@ available; MCP spans use only the validated trace context carried in MCP metadat
 
 Its only dependency other than [Soklet](https://www.soklet.com) is [opentelemetry-java](https://github.com/open-telemetry/opentelemetry-java) (the Java implementation of the OpenTelemetry API).
 
-Like [Soklet](https://www.soklet.com), Java 17+ is required.
+Like [Soklet](https://www.soklet.com), Java 21+ is required.
 
 ## Installation
 
@@ -42,9 +42,10 @@ Like [Soklet](https://www.soklet.com), Java 17+ is required.
 </dependency>
 ```
 
-Version 2.0.0 is built and tested against Soklet 4.0.0. The prior soklet-otel 1.3.1 release targets
-Soklet 3.5.1. Soklet is a provided dependency of this integration, so applications should continue to
-declare their Soklet dependency explicitly.
+Version 2.0.0 requires Java 21 or later and is built and tested against Soklet 4.0.0.
+Upgrade build toolchains and deployment runtimes that still use Java 17 before adopting these releases.
+The prior soklet-otel 1.3.1 release targets Soklet 3.5.1. Soklet is a provided dependency of this
+integration, so applications should continue to declare their Soklet dependency explicitly.
 
 ## Usage
 
