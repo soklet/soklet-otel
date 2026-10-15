@@ -28,6 +28,13 @@ The lifecycle observer creates OpenTelemetry server spans for HTTP requests, str
 connections, and admitted MCP requests. HTTP/SSE spans use Soklet's parsed HTTP W3C trace context when
 available; MCP spans use only the validated trace context carried in MCP metadata.
 
+**Tracing context limitation:** The observer does not make its server spans current during resource
+methods or other application callbacks, and it exposes no request-to-context accessor. `Span.current()`
+does not automatically refer to the Soklet server span. Spans created by application code, JDBC, or
+outbound HTTP instrumentation do not automatically become its children and can start separate traces.
+Applications requiring that trace continuity need additional request-context integration.
+
+
 Its only dependency other than [Soklet](https://www.soklet.com) is [opentelemetry-java](https://github.com/open-telemetry/opentelemetry-java) (the Java implementation of the OpenTelemetry API).
 
 Like [Soklet](https://www.soklet.com), Java 21+ is required.
@@ -108,6 +115,8 @@ Creating a builder does not read or initialize `GlobalOpenTelemetry`. If no expl
 instance, meter, or tracer is configured, the global is resolved when `build()` is called, so register
 the SDK before building the integration. Both integrations default their instrumentation version to
 the library JAR's `Implementation-Version` when available; `instrumentationVersion(...)` overrides it.
+An explicitly supplied tracer retains its own instrumentation scope even if
+`instrumentationName` or `instrumentationVersion` is configured afterward.
 
 If you already have a
 [`Meter`](https://javadoc.io/doc/io.opentelemetry/opentelemetry-api/1.66.0/io/opentelemetry/api/metrics/Meter.html),
@@ -334,7 +343,8 @@ starts at admitted semantic handling and ends at the supplied client-visible ter
 failures do not create a span, and no separate MCP session, request-stream, or subscription span is emitted.
 
 The default span name is `MCP <method>`. The built-in name and `rpc.method` use exactly these live bounded
-methods: `server/discover`, `tools/list`, `tools/call`, `prompts/list`, `prompts/get`, `resources/list`,
+methods: `initialize`, `notifications/initialized`, `ping`, `resources/subscribe`, `resources/unsubscribe`,
+`server/discover`, `tools/list`, `tools/call`, `prompts/list`, `prompts/get`, `resources/list`,
 `resources/templates/list`, `resources/read`, `completion/complete`, `subscriptions/listen`, `notifications/cancelled`,
 `tasks/get`, `tasks/update`, `tasks/cancel`, `skills/list`, and `skills/get`. Every other value, including an admitted
 unsupported notification, becomes `<unrecognized>`. The raw method is never copied to `rpc.method_original`. A custom `SpanNamingStrategy` receives
@@ -429,6 +439,11 @@ to implement it.
 - Cardinality retention and eviction are controlled by OpenTelemetry SDK views, readers, and exporters. The
   core default collector's per-family retention caps do not apply here, particularly when applications submit
   manually constructed MCP events with their own endpoint, method, or protocol-code vocabulary.
+- Soklet request-validation exceptions that produce a 4xx HTTP response leave server span status unset;
+  unexpected server failures continue to record exception events and ERROR status.
+- HTTP request/response-write and SSE event/comment write/delivery-lag histograms advise second-based
+  boundaries `[0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.25, 0.5, 0.75, 1, 2.5, 5, 7.5, 10]`.
+  This applies under both naming strategies; SDK Views can override the advice.
 - `soklet.sse.stream.duration` advises long-lived bucket boundaries
   (1s, 10s, 60s, 5m, 30m, 1h, 4h, 24h) instead of OpenTelemetry's request-oriented defaults.
   Its bucket layout changed in 1.3.0 - recheck any dashboards or alerts that referenced its previous defaults.

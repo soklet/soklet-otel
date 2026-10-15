@@ -90,6 +90,8 @@ public class OpenTelemetryMcpLifecycleObserverTests {
 	private static final String UNRECOGNIZED_METHOD = "notifications/vendor.secret-canary";
 	private static final String UNRECOGNIZED_METHOD_LABEL = "<unrecognized>";
 	private static final Set<String> CORE_METHODS = Set.of(
+			"initialize", "notifications/initialized", "ping",
+			"resources/subscribe", "resources/unsubscribe",
 			"server/discover", "tools/list", "tools/call", "prompts/list",
 			"prompts/get", "resources/list", "resources/templates/list",
 			"resources/read", "completion/complete", "subscriptions/listen", "notifications/cancelled",

@@ -84,6 +84,124 @@ import static java.util.Objects.requireNonNull;
  */
 public class OpenTelemetryMetricsCollectorTests {
 	@Test
+	public void httpAndSseLatencyHistogramsAdviseSecondBasedBuckets() throws Exception {
+		List<Double> expected = List.of(0.005D, 0.01D, 0.025D, 0.05D, 0.075D, 0.1D,
+				0.25D, 0.5D, 0.75D, 1D, 2.5D, 5D, 7.5D, 10D);
+		for (var strategy : OpenTelemetryMetricsCollector.MetricNamingStrategy.values()) {
+			TestHarness harness = TestHarness.create();
+			try {
+				var collector = OpenTelemetryMetricsCollector.withMeter(harness.openTelemetrySdk().getMeter("latencies"))
+						.metricNamingStrategy(strategy).build();
+				Request request = Request.fromPath(HttpMethod.GET, "/latency");
+				MarshaledResponse response = MarshaledResponse.fromStatusCode(200);
+				for (Duration duration : List.of(Duration.ofMillis(3), Duration.ofMillis(300))) {
+					collector.didStartRequestHandling(ServerType.HTTP, request, null);
+					collector.didFinishRequestHandling(ServerType.HTTP, request, null, response, duration, List.of());
+					collector.didWriteResponse(ServerType.HTTP, request, null, response, duration);
+				}
+				var method = createResourceMethod(HttpMethod.GET, "/latency", "chat");
+				var connection = new TestSseConnection(request, method, Instant.now());
+				collector.didWriteSseEvent(connection, SseEvent.withEvent("message").data("hello").build(),
+						Duration.ofMillis(3), Duration.ofMillis(300), 5, 0);
+				collector.didWriteSseComment(connection, SseComment.heartbeatInstance(),
+						Duration.ofMillis(3), Duration.ofMillis(300), 0, 0);
+				var metrics = harness.metricReader().collectAllMetrics();
+				String requestMetric = strategy == OpenTelemetryMetricsCollector.MetricNamingStrategy.SEMCONV
+						? "http.server.request.duration" : "soklet.server.request.duration";
+				for (String name : List.of(requestMetric, "soklet.server.response.write.duration",
+						"soklet.sse.events.write.duration", "soklet.sse.events.delivery.lag",
+						"soklet.sse.comments.write.duration", "soklet.sse.comments.delivery.lag"))
+					Assertions.assertEquals(expected, histogramBoundaries(metrics, name), name);
+				HistogramPointData requests = metricByName(metrics, requestMetric).getHistogramData().getPoints()
+						.iterator().next();
+				Assertions.assertEquals(1L, requests.getCounts().get(0));
+				Assertions.assertEquals(1L, requests.getCounts().get(7), "300ms must be separate from 3ms");
+			} finally { harness.openTelemetrySdk().close(); }
+		}
+	}
+
+	@Test
+	public void oversizedHttpDurationStillRecordsCompletionMetrics() {
+		for (var strategy : OpenTelemetryMetricsCollector.MetricNamingStrategy.values()) {
+			TestHarness harness = TestHarness.create();
+			try {
+				var collector = OpenTelemetryMetricsCollector.withMeter(harness.openTelemetrySdk().getMeter("large-http-duration"))
+						.metricNamingStrategy(strategy).build();
+				Request request = Request.fromPath(HttpMethod.GET, "/duration");
+				MarshaledResponse response = MarshaledResponse.withStatusCode(200).body(new byte[]{1, 2, 3}).build();
+				collector.didStartRequestHandling(ServerType.HTTP, request, null);
+				Assertions.assertDoesNotThrow(() -> collector.didFinishRequestHandling(ServerType.HTTP, request, null,
+						response, Duration.ofSeconds(Long.MAX_VALUE, 999_999_999), List.of()));
+				var metrics = harness.metricReader().collectAllMetrics();
+				boolean semconv = strategy == OpenTelemetryMetricsCollector.MetricNamingStrategy.SEMCONV;
+				String prefix = semconv ? "http.server" : "soklet.server";
+				Assertions.assertEquals(0L, longSumValue(metrics, semconv ? "http.server.active_requests" : "soklet.server.requests.active", a -> true));
+				Assertions.assertEquals(1L, histogramCount(metrics, prefix + ".request.duration", a -> true));
+				Assertions.assertEquals((double) Long.MAX_VALUE, histogramSum(metrics, prefix + ".request.duration", a -> true));
+				Assertions.assertEquals(3D, histogramSum(metrics, prefix + ".response.body.size", a -> true));
+			} finally { harness.openTelemetrySdk().close(); }
+		}
+	}
+
+	@Test
+	public void oversizedSseDurationStillRecordsCompletionMetrics() throws Exception {
+		TestHarness harness = TestHarness.create();
+		try {
+			var collector = OpenTelemetryMetricsCollector.fromOpenTelemetry(harness.openTelemetrySdk());
+			Request request = Request.fromPath(HttpMethod.GET, "/duration");
+			ResourceMethod method = createResourceMethod(HttpMethod.GET, "/duration", "chat");
+			var connection = new TestSseConnection(request, method, Instant.now());
+			collector.didEstablishSseConnection(connection);
+			var termination = StreamTermination.with(StreamTerminationReason.COMPLETED,
+					Duration.ofSeconds(Long.MAX_VALUE, 999_999_999)).build();
+			Assertions.assertDoesNotThrow(() -> collector.didTerminateSseConnection(connection, termination));
+			var metrics = harness.metricReader().collectAllMetrics();
+			Assertions.assertEquals(1L, histogramCount(metrics, "soklet.sse.stream.duration", a -> true));
+			Assertions.assertEquals((double) Long.MAX_VALUE, histogramSum(metrics, "soklet.sse.stream.duration", a -> true));
+		} finally { harness.openTelemetrySdk().close(); }
+	}
+
+	@Test
+	public void oversizedStreamingHttpDurationStillRecordsCompletionMetrics() {
+		for (var strategy : OpenTelemetryMetricsCollector.MetricNamingStrategy.values()) {
+			for (boolean terminalFirst : List.of(false, true)) {
+				TestHarness harness = TestHarness.create();
+				try {
+					var collector = OpenTelemetryMetricsCollector.withMeter(harness.openTelemetrySdk().getMeter("large-stream-duration"))
+							.metricNamingStrategy(strategy).build();
+					Request request = Request.fromPath(HttpMethod.GET, "/duration");
+					MarshaledResponse response = MarshaledResponse.withStatusCode(200).stream(stream -> {}).build();
+					var handle = new com.soklet.StreamingResponseHandle() {
+						@Override public ServerType getServerType() { return ServerType.HTTP; }
+						@Override public Request getRequest() { return request; }
+						@Override public Optional<ResourceMethod> getResourceMethod() { return Optional.empty(); }
+						@Override public MarshaledResponse getMarshaledResponse() { return response; }
+						@Override public Instant getEstablishedAt() { return Instant.now(); }
+					};
+					Duration duration = Duration.ofSeconds(Long.MAX_VALUE, 999_999_999);
+					var termination = StreamTermination.with(StreamTerminationReason.COMPLETED, duration).build();
+					collector.didStartRequestHandling(ServerType.HTTP, request, null);
+					collector.willWriteResponseStream(handle);
+					Assertions.assertDoesNotThrow(() -> {
+						if (terminalFirst) collector.didTerminateResponseStream(handle, termination, duration, 7L);
+						collector.didFinishRequestHandling(ServerType.HTTP, request, null, response, Duration.ofMillis(2), List.of());
+						if (!terminalFirst) collector.didTerminateResponseStream(handle, termination, duration, 7L);
+					});
+					collector.didTerminateResponseStream(handle, termination, duration, 99L);
+					var metrics = harness.metricReader().collectAllMetrics();
+					boolean semconv = strategy == OpenTelemetryMetricsCollector.MetricNamingStrategy.SEMCONV;
+					String prefix = semconv ? "http.server" : "soklet.server";
+					Assertions.assertEquals(0L, longSumValue(metrics, semconv ? "http.server.active_requests" : "soklet.server.requests.active", a -> true));
+					Assertions.assertEquals(1L, histogramCount(metrics, prefix + ".request.duration", a -> true));
+					Assertions.assertEquals((double) Long.MAX_VALUE, histogramSum(metrics, prefix + ".request.duration", a -> true));
+					Assertions.assertEquals(7D, histogramSum(metrics, prefix + ".response.body.size", a -> true));
+					Assertions.assertEquals(1L, longSumValue(metrics, "soklet.http.response.stream.terminations", a -> true));
+				} finally { harness.openTelemetrySdk().close(); }
+			}
+		}
+	}
+
+	@Test
 	public void customStreamCompletionRequiresPreparationAndIsIndependentOfCallbackOrder() throws Exception {
 		for (var strategy : OpenTelemetryMetricsCollector.MetricNamingStrategy.values()) {
 			for (boolean prepared : List.of(false, true)) {

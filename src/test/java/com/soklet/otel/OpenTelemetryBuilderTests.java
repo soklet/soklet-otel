@@ -85,6 +85,33 @@ public class OpenTelemetryBuilderTests {
 	}
 
 	@Test
+	public void instrumentationSettingsPreserveExplicitTracerInEitherOrder() {
+		InMemorySpanExporter spans = InMemorySpanExporter.create();
+		try (OpenTelemetrySdk sdk = OpenTelemetrySdk.builder().setTracerProvider(SdkTracerProvider.builder()
+				.addSpanProcessor(SimpleSpanProcessor.create(spans)).build()).build()) {
+			var tracer = sdk.getTracer("explicit-tracer", "provided-version");
+			for (var builder : List.of(
+					OpenTelemetryLifecycleObserver.withTracer(tracer).instrumentationName("ignored-name"),
+					OpenTelemetryLifecycleObserver.withTracer(tracer).instrumentationVersion("ignored-version"),
+					OpenTelemetryLifecycleObserver.builder().instrumentationName("ignored-name")
+							.instrumentationVersion("ignored-version").tracer(tracer))) {
+				try (var observer = builder.build()) {
+					Request request = Request.fromPath(HttpMethod.GET, "/explicit-tracer");
+					observer.didStartRequestHandling(ServerType.HTTP, request, null);
+					observer.didFinishRequestHandling(ServerType.HTTP, request, null,
+							MarshaledResponse.fromStatusCode(200), Duration.ZERO, List.of());
+				}
+			}
+			Assertions.assertEquals(3, spans.getFinishedSpanItems().size());
+			for (var span : spans.getFinishedSpanItems()) {
+				Assertions.assertEquals("explicit-tracer", span.getInstrumentationScopeInfo().getName());
+				Assertions.assertEquals("provided-version", span.getInstrumentationScopeInfo().getVersion());
+			}
+			Assertions.assertDoesNotThrow(() -> GlobalOpenTelemetry.set(OpenTelemetry.noop()));
+		}
+	}
+
+	@Test
 	public void explicitInstrumentationVersionOverridesSharedDefault() {
 		InMemorySpanExporter spans = InMemorySpanExporter.create();
 		InMemoryMetricReader metricReader = InMemoryMetricReader.create();

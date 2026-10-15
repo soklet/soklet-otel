@@ -39,6 +39,8 @@ final class DefaultSpanNamingStrategy implements SpanNamingStrategy {
 	private static final DefaultSpanNamingStrategy DEFAULT_INSTANCE = new DefaultSpanNamingStrategy();
 	@NonNull
 	private static final Set<@NonNull String> BOUNDED_MCP_JSON_RPC_METHODS = Set.of(
+			"initialize", "notifications/initialized", "ping",
+			"resources/subscribe", "resources/unsubscribe",
 			"server/discover", "tools/list", "tools/call", "prompts/list",
 			"prompts/get", "resources/list", "resources/templates/list",
 			"resources/read", "completion/complete", "subscriptions/listen", "notifications/cancelled",

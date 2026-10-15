@@ -372,6 +372,7 @@ public class OpenTelemetryLifecycleObserverTests {
 						Assertions.assertTrue(wire.startsWith("HTTP/1.1 503"), wire);
 					}
 					awaitSpanCount(observer, 1);
+					awaitExportedSpanCount(harness, 1);
 					SpanData rejection = onlySpan(harness);
 					Assertions.assertEquals(503L, rejection.getAttributes().get(STATUS_CODE_ATTRIBUTE_KEY));
 					// A precommit rejection has no body-delivery lifetime. Its finite
@@ -381,6 +382,7 @@ public class OpenTelemetryLifecycleObserverTests {
 					Assertions.assertTrue(wire.startsWith("HTTP/1.1 200"), wire);
 				}
 				awaitSpanCount(observer, 0);
+				awaitExportedSpanCount(harness, 2);
 			} finally {
 				releaseHeldProducer.countDown(); soklet.close();
 			}
@@ -403,6 +405,14 @@ public class OpenTelemetryLifecycleObserverTests {
 					.getBytes(StandardCharsets.ISO_8859_1));
 			return socket;
 		} catch (Exception exception) { socket.close(); throw exception; }
+	}
+
+	private static void awaitExportedSpanCount(TestHarness harness, int expected) throws Exception {
+		// Active-state removal precedes span.end() and synchronous export.
+		long until = System.nanoTime() + TimeUnit.SECONDS.toNanos(3);
+		while (harness.spanExporter().getFinishedSpanItems().size() < expected && System.nanoTime() - until < 0L)
+			Thread.sleep(5L);
+		Assertions.assertEquals(expected, harness.spanExporter().getFinishedSpanItems().size());
 	}
 
 	private static void awaitSpanCount(OpenTelemetryLifecycleObserver observer, int expected) throws Exception {
@@ -529,6 +539,41 @@ public class OpenTelemetryLifecycleObserverTests {
 		SpanData span = onlySpan(harness);
 		Assertions.assertEquals(StatusCode.UNSET, span.getStatus().getStatusCode());
 		Assertions.assertNull(span.getAttributes().get(ERROR_TYPE_ATTRIBUTE_KEY));
+	}
+
+	@Test
+	public void badRequestBindingFailuresDoNotBecomeServerErrors() {
+		for (Throwable failure : List.of(
+				new com.soklet.exception.IllegalQueryParameterException("invalid integer", "count", "abc"),
+				new com.soklet.exception.IllegalPathParameterException("invalid integer", "id", "abc"))) {
+			TestHarness harness = TestHarness.create();
+			try (var observer = OpenTelemetryLifecycleObserver.fromOpenTelemetry(harness.openTelemetrySdk())) {
+				Request request = Request.fromPath(HttpMethod.GET, "/invalid");
+				observer.didStartRequestHandling(ServerType.HTTP, request, null);
+				observer.didFinishRequestHandling(ServerType.HTTP, request, null,
+						MarshaledResponse.fromStatusCode(400), Duration.ZERO, List.of(failure));
+				SpanData span = onlySpan(harness);
+				Assertions.assertEquals(StatusCode.UNSET, span.getStatus().getStatusCode());
+				Assertions.assertNull(span.getAttributes().get(ERROR_TYPE_ATTRIBUTE_KEY));
+				Assertions.assertTrue(span.getEvents().isEmpty());
+			} finally { harness.openTelemetrySdk().close(); }
+		}
+	}
+
+	@Test
+	public void clientErrorResponsesStillRecordUnexpectedServerFailures() {
+		TestHarness harness = TestHarness.create();
+		try (var observer = OpenTelemetryLifecycleObserver.fromOpenTelemetry(harness.openTelemetrySdk())) {
+			Request request = Request.fromPath(HttpMethod.GET, "/invalid");
+			observer.didStartRequestHandling(ServerType.HTTP, request, null);
+			observer.didFinishRequestHandling(ServerType.HTTP, request, null, MarshaledResponse.fromStatusCode(400),
+					Duration.ZERO, List.of(new com.soklet.exception.IllegalQueryParameterException("bad", "count", "abc"),
+							new IllegalStateException("server failure")));
+			SpanData span = onlySpan(harness);
+			Assertions.assertEquals(StatusCode.ERROR, span.getStatus().getStatusCode());
+			Assertions.assertEquals(IllegalStateException.class.getName(), span.getAttributes().get(ERROR_TYPE_ATTRIBUTE_KEY));
+			Assertions.assertEquals(1, span.getEvents().size());
+		} finally { harness.openTelemetrySdk().close(); }
 	}
 
 	@Test

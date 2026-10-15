@@ -32,6 +32,7 @@ import com.soklet.StreamTerminationReason;
 import com.soklet.StreamingResponseHandle;
 import com.soklet.TraceContext;
 import com.soklet.TraceStateEntry;
+import com.soklet.exception.BadRequestException;
 import io.opentelemetry.api.GlobalOpenTelemetry;
 import io.opentelemetry.api.OpenTelemetry;
 import io.opentelemetry.api.common.AttributeKey;
@@ -73,6 +74,13 @@ import static java.util.Objects.requireNonNull;
  * <p>
  * This type complements {@link OpenTelemetryMetricsCollector}: metrics remain low-cardinality aggregate telemetry,
  * while this observer emits per-request and per-stream spans.
+ * <p>
+ * <strong>Tracing context limitation:</strong> This observer does not make its server spans current during
+ * resource methods or application callbacks, and exposes no request-to-context accessor.
+ * {@link Span#current()} therefore does not automatically refer to the Soklet server span. Application,
+ * JDBC, and outbound HTTP spans do not automatically become its children and can start separate traces.
+ * Applications requiring that trace continuity need additional request-context integration.
+ * <p>
  * The {@code soklet.server.type} attribute uses {@code http}, {@code sse}, or {@code mcp},
  * matching the metrics vocabulary wherever that attribute is emitted. In 2.0.0, HTTP spans retain
  * {@code http}; SSE spans use {@code sse} instead of the legacy value {@code server_sent_event}.
@@ -626,12 +634,17 @@ public final class OpenTelemetryLifecycleObserver implements LifecycleObserver, 
 		setRouteAttribute(span, resourceMethod);
 		span.setAttribute(HTTP_STATUS_CODE_ATTRIBUTE_KEY, marshaledResponse.getStatusCode().longValue());
 
-		for (Throwable throwable : throwables)
+		boolean recordedException = false;
+		boolean clientError = marshaledResponse.getStatusCode() >= 400 && marshaledResponse.getStatusCode() < 500;
+		for (Throwable throwable : throwables) {
+			// Binding and request validation failures are expected client errors.
+			if (clientError && throwable instanceof BadRequestException)
+				continue;
 			recordException(span, throwable);
+			recordedException = true;
+		}
 
-		if (!throwables.isEmpty()) {
-			span.setStatus(StatusCode.ERROR);
-		} else if (marshaledResponse.getStatusCode() >= 500) {
+		if (!recordedException && marshaledResponse.getStatusCode() >= 500) {
 			span.setAttribute(ERROR_TYPE_ATTRIBUTE_KEY, String.valueOf(marshaledResponse.getStatusCode()));
 			span.setStatus(StatusCode.ERROR);
 		}
@@ -980,17 +993,29 @@ public final class OpenTelemetryLifecycleObserver implements LifecycleObserver, 
 			return this;
 		}
 
+		/**
+		 * Sets the instrumentation scope name used when constructing a tracer.
+		 * An explicitly supplied tracer retains its own scope.
+		 *
+		 * @param instrumentationName the instrumentation scope name
+		 * @return this builder
+		 */
 		@NonNull
 		public Builder instrumentationName(@NonNull String instrumentationName) {
 			this.instrumentationName = requireNonNull(instrumentationName);
-			this.tracer = null;
 			return this;
 		}
 
+		/**
+		 * Sets the instrumentation scope version used when constructing a tracer.
+		 * An explicitly supplied tracer retains its own scope.
+		 *
+		 * @param instrumentationVersion the instrumentation scope version, or {@code null}
+		 * @return this builder
+		 */
 		@NonNull
 		public Builder instrumentationVersion(@Nullable String instrumentationVersion) {
 			this.instrumentationVersion = instrumentationVersion;
-			this.tracer = null;
 			return this;
 		}
 

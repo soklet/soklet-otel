@@ -166,6 +166,8 @@ public final class OpenTelemetryMetricsCollector implements MetricsCollector {
 	@NonNull
 	private static final AttributeKey<String> MCP_SHUTDOWN_OUTCOME_ATTRIBUTE_KEY;
 	@NonNull
+	private static final List<Double> REQUEST_DURATION_BUCKET_BOUNDARIES;
+	@NonNull
 	private static final List<Double> LONG_LIVED_DURATION_BUCKET_BOUNDARIES;
 	@NonNull
 	private static final List<Double> MCP_REQUEST_DURATION_BUCKET_BOUNDARIES;
@@ -204,6 +206,9 @@ public final class OpenTelemetryMetricsCollector implements MetricsCollector {
 				AttributeKey.stringKey("soklet.mcp.subscription.maintenance.outcome");
 		RPC_JSON_RPC_ERROR_CODE_ATTRIBUTE_KEY = AttributeKey.longKey("rpc.jsonrpc.error_code");
 		MCP_SHUTDOWN_OUTCOME_ATTRIBUTE_KEY = AttributeKey.stringKey("soklet.mcp.shutdown.outcome");
+		// OpenTelemetry HTTP semantic conventions express request latencies in seconds.
+		REQUEST_DURATION_BUCKET_BOUNDARIES = List.of(
+				0.005D, 0.01D, 0.025D, 0.05D, 0.075D, 0.1D, 0.25D, 0.5D, 0.75D, 1D, 2.5D, 5D, 7.5D, 10D);
 		// SSE streams live for minutes-to-hours, so OpenTelemetry's request-oriented
 		// defaults would collapse nearly all measurements into the +Inf bucket.
 		LONG_LIVED_DURATION_BUCKET_BOUNDARIES = List.of(1D, 10D, 60D, 300D, 1_800D, 3_600D, 14_400D, 86_400D);
@@ -443,10 +448,12 @@ public final class OpenTelemetryMetricsCollector implements MetricsCollector {
 		this.requestDurationHistogram = meter.histogramBuilder(requestDurationMetricName)
 				.setDescription("Total request handling duration.")
 				.setUnit("s")
+				.setExplicitBucketBoundariesAdvice(REQUEST_DURATION_BUCKET_BOUNDARIES)
 				.build();
 		this.responseWriteDurationHistogram = meter.histogramBuilder("soklet.server.response.write.duration")
 				.setDescription("Duration spent writing response bytes.")
 				.setUnit("s")
+				.setExplicitBucketBoundariesAdvice(REQUEST_DURATION_BUCKET_BOUNDARIES)
 				.build();
 		this.responseWriteFailureCounter = meter.counterBuilder("soklet.server.response.write.failures")
 				.setDescription("Total number of response write failures.")
@@ -499,10 +506,12 @@ public final class OpenTelemetryMetricsCollector implements MetricsCollector {
 		this.serverSentEventWriteDurationHistogram = meter.histogramBuilder("soklet.sse.events.write.duration")
 				.setDescription("SSE event write duration.")
 				.setUnit("s")
+				.setExplicitBucketBoundariesAdvice(REQUEST_DURATION_BUCKET_BOUNDARIES)
 				.build();
 		this.serverSentEventDeliveryLagHistogram = meter.histogramBuilder("soklet.sse.events.delivery.lag")
 				.setDescription("Time spent waiting in the SSE queue before write.")
 				.setUnit("s")
+				.setExplicitBucketBoundariesAdvice(REQUEST_DURATION_BUCKET_BOUNDARIES)
 				.build();
 		this.serverSentEventPayloadSizeHistogram = meter.histogramBuilder("soklet.sse.events.payload.size")
 				.ofLongs()
@@ -530,10 +539,12 @@ public final class OpenTelemetryMetricsCollector implements MetricsCollector {
 		this.serverSentEventCommentWriteDurationHistogram = meter.histogramBuilder("soklet.sse.comments.write.duration")
 				.setDescription("SSE comment write duration.")
 				.setUnit("s")
+				.setExplicitBucketBoundariesAdvice(REQUEST_DURATION_BUCKET_BOUNDARIES)
 				.build();
 		this.serverSentEventCommentDeliveryLagHistogram = meter.histogramBuilder("soklet.sse.comments.delivery.lag")
 				.setDescription("Time spent waiting in the SSE queue before comment write.")
 				.setUnit("s")
+				.setExplicitBucketBoundariesAdvice(REQUEST_DURATION_BUCKET_BOUNDARIES)
 				.build();
 		this.serverSentEventCommentPayloadSizeHistogram = meter.histogramBuilder("soklet.sse.comments.payload.size")
 				.ofLongs()
@@ -1440,7 +1451,7 @@ public final class OpenTelemetryMetricsCollector implements MetricsCollector {
 
 	private static double seconds(@NonNull Duration duration) {
 		requireNonNull(duration);
-		return duration.toNanos() / 1_000_000_000D;
+		return safeSeconds(duration);
 	}
 
 	private static double safeSeconds(@NonNull Duration duration) {
