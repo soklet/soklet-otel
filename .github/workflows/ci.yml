@@ -9,10 +9,10 @@ on:
       soklet_ref:
         description: Exact 40-character Soklet commit SHA to validate (not a branch or tag)
         required: false
-        default: 61d02245c745cedf8452a1fc0a13be96f9414a9b
+        default: 8dc7f45db6eb02990c2ac790fa8af669c412637f
 
 env:
-  SOKLET_CANDIDATE_SHA: ${{ inputs.soklet_ref || '61d02245c745cedf8452a1fc0a13be96f9414a9b' }}
+  SOKLET_CANDIDATE_SHA: ${{ inputs.soklet_ref || '8dc7f45db6eb02990c2ac790fa8af669c412637f' }}
 
 permissions:
   contents: read
@@ -33,7 +33,7 @@ jobs:
         jdk: ['21', '25']
     steps:
       - name: Check out soklet-otel
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           path: soklet-otel
           persist-credentials: false
@@ -47,7 +47,7 @@ jobs:
           fi
 
       - name: Check out soklet
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           repository: soklet/soklet
           ref: ${{ env.SOKLET_CANDIDATE_SHA }}
@@ -83,7 +83,7 @@ jobs:
           printf 'SOKLET_JAVADOC_HOME=%s\n' "$docs_home" >> "$GITHUB_ENV"
 
       - name: Set up JDK ${{ matrix.jdk }}
-        uses: actions/setup-java@v6
+        uses: actions/setup-java@dd06d9cba3e5552c54d9f8ea23572deb30010f7c # v6.0.0
         with:
           distribution: corretto
           java-version: ${{ matrix.jdk }}

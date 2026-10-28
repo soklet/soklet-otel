@@ -21,7 +21,7 @@ a production-oriented implementation of Soklet's
 [`LifecycleObserver`](https://javadoc.soklet.com/com/soklet/LifecycleObserver.html) interface.
 
 The metrics collector records HTTP, SSE, and modern MCP event telemetry into OpenTelemetry
-[`Meter`](https://javadoc.io/doc/io.opentelemetry/opentelemetry-api/1.66.0/io/opentelemetry/api/metrics/Meter.html)
+[`Meter`](https://javadoc.io/doc/io.opentelemetry/opentelemetry-api/1.67.0/io/opentelemetry/api/metrics/Meter.html)
 instruments (counters, up-down counters,
 and histograms), so your existing OTel pipeline/exporter stack can collect and ship metrics.
 The lifecycle observer creates OpenTelemetry server spans for HTTP requests, streaming responses, SSE
@@ -104,8 +104,8 @@ Related API references:
 - [`OpenTelemetryLifecycleObserver`](https://otel.javadoc.soklet.com/com/soklet/otel/OpenTelemetryLifecycleObserver.html)
 - [`SpanPolicy`](https://otel.javadoc.soklet.com/com/soklet/otel/SpanPolicy.html)
 - [`SpanNamingStrategy`](https://otel.javadoc.soklet.com/com/soklet/otel/SpanNamingStrategy.html)
-- [`OpenTelemetry`](https://javadoc.io/doc/io.opentelemetry/opentelemetry-api/1.66.0/io/opentelemetry/api/OpenTelemetry.html)
-- [`Meter`](https://javadoc.io/doc/io.opentelemetry/opentelemetry-api/1.66.0/io/opentelemetry/api/metrics/Meter.html)
+- [`OpenTelemetry`](https://javadoc.io/doc/io.opentelemetry/opentelemetry-api/1.67.0/io/opentelemetry/api/OpenTelemetry.html)
+- [`Meter`](https://javadoc.io/doc/io.opentelemetry/opentelemetry-api/1.67.0/io/opentelemetry/api/metrics/Meter.html)
 - [`SokletConfig`](https://javadoc.soklet.com/com/soklet/SokletConfig.html)
 - [`HttpServer`](https://javadoc.soklet.com/com/soklet/HttpServer.html)
 - [`MetricsCollector`](https://javadoc.soklet.com/com/soklet/MetricsCollector.html)
@@ -119,7 +119,7 @@ An explicitly supplied tracer retains its own instrumentation scope even if
 `instrumentationName` or `instrumentationVersion` is configured afterward.
 
 If you already have a
-[`Meter`](https://javadoc.io/doc/io.opentelemetry/opentelemetry-api/1.66.0/io/opentelemetry/api/metrics/Meter.html),
+[`Meter`](https://javadoc.io/doc/io.opentelemetry/opentelemetry-api/1.67.0/io/opentelemetry/api/metrics/Meter.html),
 wire directly:
 
 ```java

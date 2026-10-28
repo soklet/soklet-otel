@@ -24,12 +24,12 @@
       "source": "https://repo.maven.apache.org/maven2/org/jspecify/jspecify/1.0.1/jspecify-1.0.1-javadoc.jar"
     },
     {
-      "path": "opentelemetry-api-1.66.0/element-list",
-      "url": "https://javadoc.io/static/io.opentelemetry/opentelemetry-api/1.66.0/",
+      "path": "opentelemetry-api-1.67.0/element-list",
+      "url": "https://javadoc.io/static/io.opentelemetry/opentelemetry-api/1.67.0/",
       "sha256": "6b1279638f382f861bbb45044523de457ea671e48010257fbf15d1ab93ca589f",
       "upstreamIndexSha256": "6b1279638f382f861bbb45044523de457ea671e48010257fbf15d1ab93ca589f",
-      "archiveSha256": "1c35c1d191217d61b302739cc625ffbf2e64bbf6af753bededeff2e98ca6d9ff",
-      "source": "https://repo.maven.apache.org/maven2/io/opentelemetry/opentelemetry-api/1.66.0/opentelemetry-api-1.66.0-javadoc.jar"
+      "archiveSha256": "e686e08bed8b8677ce7e802cd14b39a1e5ed7c67f1f2297a16ae476e886a06c4",
+      "source": "https://repo.maven.apache.org/maven2/io/opentelemetry/opentelemetry-api/1.67.0/opentelemetry-api-1.67.0-javadoc.jar"
     }
   ]
 }

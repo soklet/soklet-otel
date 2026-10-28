@@ -55,7 +55,7 @@
 		<!-- Release builds override this with the unpacked exact-candidate core Javadoc JAR. -->
 		<soklet.javadoc.location>https://javadoc.soklet.com/</soklet.javadoc.location>
 		<soklet.version>4.0.0</soklet.version>
-		<opentelemetry.version>1.66.0</opentelemetry.version>
+		<opentelemetry.version>1.67.0</opentelemetry.version>
 		<junit.version>6.1.3</junit.version>
 	</properties>
 
@@ -145,8 +145,8 @@
 							<location>${project.basedir}/src/main/javadoc/links/jspecify-1.0.1</location>
 						</offlineLink>
 						<offlineLink>
-							<url>https://javadoc.io/static/io.opentelemetry/opentelemetry-api/1.66.0/</url>
-							<location>${project.basedir}/src/main/javadoc/links/opentelemetry-api-1.66.0</location>
+							<url>https://javadoc.io/static/io.opentelemetry/opentelemetry-api/1.67.0/</url>
+							<location>${project.basedir}/src/main/javadoc/links/opentelemetry-api-1.67.0</location>
 						</offlineLink>
 						<offlineLink>
 							<url>https://javadoc.soklet.com/</url>
