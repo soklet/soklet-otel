@@ -177,8 +177,9 @@ Soklet-specific metrics (all strategies):
 - `soklet.sse.broadcast.dropped`
 
 The throwable counter uses the same attributes as request duration: `http.request.method`,
-`http.response.status_code`, and `error.type` containing the first observed throwable's class
-name. With `SEMCONV`, it also has `url.scheme=http` and `http.route` only for matched routes;
+`http.response.status_code`, and optional `error.type` containing the first relevant throwable's class
+name. `SEMCONV` excludes expected Soklet `BadRequestException` failures for 4xx
+responses from error classification; other observed failures still qualify. With `SEMCONV`, it also has `url.scheme=http` and `http.route` only for matched routes;
 with `SOKLET`, it has `soklet.server.type` and `http.route` (including `_unmatched`).
 An invocation with two observed throwables increments the counter by two. Throwable messages,
 stack traces, and attributes from later throwables are not exported by this counter.
@@ -288,7 +289,7 @@ Request decompression failures use `soklet.failure.reason=request_body_decompres
 - With `SEMCONV`, unmatched requests omit `http.route` (per OTel guidance).
 - With `SOKLET`, unmatched requests are grouped under `_unmatched`.
 - Request paths, remote addresses, and raw query values are intentionally not emitted as attributes by default.
-- HTTP request duration and body-size metrics use the first throwable's class name as `error.type`. With `SEMCONV`, a throwable-free 5xx response uses the decimal HTTP status. Under either naming strategy, failed response streams without a throwable use their lower-snake termination reason, such as `response_timeout` or `response_idle_timeout`, when no error type was already recorded. Routine client cancellation, disconnect, and server shutdown do not add an error type. These fallback values have bounded cardinality; deployments with many custom exception types should account for their cardinality in the OpenTelemetry backend.
+- HTTP request duration and body-size metrics use the first relevant throwable's class name as `error.type`. `SEMCONV` omits expected Soklet `BadRequestException` failures for 4xx responses while preserving unexpected failures; `SOKLET` retains the first throwable for compatibility. With `SEMCONV`, a throwable-free 5xx response uses the decimal HTTP status. Under either naming strategy, failed response streams without a throwable use their lower-snake termination reason, such as `response_timeout` or `response_idle_timeout`, when no error type was already recorded. Routine client cancellation, disconnect, and server shutdown do not add an error type. These fallback values have bounded cardinality; deployments with many custom exception types should account for their cardinality in the OpenTelemetry backend.
 - Framework-produced MCP metric dimensions are limited to registered endpoint paths, recognized methods or
   `<unrecognized>`, fixed lower-snake enum values, and the ten fixed protocol-error codes listed above.
 - The unknown-mirrored-header counter records only endpoint and method. It never records a header name or value.

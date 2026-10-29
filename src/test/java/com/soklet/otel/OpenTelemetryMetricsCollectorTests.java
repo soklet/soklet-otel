@@ -37,6 +37,7 @@ import com.soklet.SseConnection;
 import com.soklet.SseEvent;
 import com.soklet.StreamTermination;
 import com.soklet.StreamTerminationReason;
+import com.soklet.exception.IllegalRequestException;
 import io.opentelemetry.api.common.AttributeKey;
 import io.opentelemetry.api.common.Attributes;
 import io.opentelemetry.api.metrics.LongCounter;
@@ -1221,6 +1222,33 @@ public class OpenTelemetryMetricsCollectorTests {
 					? "http.server.request.duration" : "soklet.server.request.duration";
 			Assertions.assertEquals(point.getAttributes(), metricByName(metrics, durationName)
 					.getHistogramData().getPoints().iterator().next().getAttributes());
+		}
+	}
+
+	@Test
+	public void expectedClientBindingFailuresDoNotSetSemconvErrorType() {
+		for (var strategy : OpenTelemetryMetricsCollector.MetricNamingStrategy.values()) {
+			for (int status : List.of(400, 500)) {
+				for (boolean unexpectedFailure : List.of(false, true)) {
+					TestHarness harness = TestHarness.create();
+					var collector = OpenTelemetryMetricsCollector.withMeter(harness.openTelemetrySdk().getMeter("validation"))
+							.metricNamingStrategy(strategy).build();
+					Request request = Request.fromPath(HttpMethod.GET, "/validation");
+					List<Throwable> failures = unexpectedFailure
+							? List.of(new IllegalRequestException("invalid input"), new IllegalStateException("unexpected failure"))
+							: List.of(new IllegalRequestException("invalid input"));
+					collector.didStartRequestHandling(ServerType.HTTP, request, null);
+					collector.didFinishRequestHandling(ServerType.HTTP, request, null,
+							MarshaledResponse.fromStatusCode(status), Duration.ofMillis(1), failures);
+					boolean semconv = strategy == OpenTelemetryMetricsCollector.MetricNamingStrategy.SEMCONV;
+					String metricName = semconv ? "http.server.request.duration" : "soklet.server.request.duration";
+					String actual = metricByName(harness.metricReader().collectAllMetrics(), metricName)
+							.getHistogramData().getPoints().iterator().next().getAttributes().get(ERROR_TYPE_ATTRIBUTE_KEY);
+					String expected = semconv && status == 400
+							? (unexpectedFailure ? IllegalStateException.class.getName() : null) : IllegalRequestException.class.getName();
+					Assertions.assertEquals(expected, actual);
+				}
+			}
 		}
 	}
 

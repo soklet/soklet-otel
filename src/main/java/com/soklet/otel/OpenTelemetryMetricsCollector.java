@@ -43,6 +43,7 @@ import io.opentelemetry.api.metrics.LongUpDownCounter;
 import io.opentelemetry.api.metrics.Meter;
 import io.opentelemetry.api.metrics.MeterBuilder;
 import org.jspecify.annotations.NonNull;
+import com.soklet.exception.BadRequestException;
 import org.jspecify.annotations.Nullable;
 
 import javax.annotation.concurrent.NotThreadSafe;
@@ -86,8 +87,10 @@ import static java.util.Objects.requireNonNull;
  * continue to omit it; instrument names and {@code url.scheme} are unchanged by this value mapping.
  * The {@code soklet.server.request.throwables} counter uses unit {@code {throwable}} and increments
  * by the number of observed throwables, not the number of failed requests. It has the same
- * strategy-dependent attributes as request duration, including the first throwable's class as
- * {@code error.type}; throwable messages and stack traces are not metric attributes.
+ * strategy-dependent attributes as request duration, including the first relevant throwable's class as
+ * {@code error.type}. When selecting {@code error.type}, SEMCONV omits expected
+ * {@code BadRequestException} failures for 4xx responses; SOKLET retains the first throwable for compatibility.
+ * In both strategies, throwable messages and stack traces are not metric attributes.
  * <p>
  * If inbound requests include W3C trace context, Soklet exposes it via {@link Request#getTraceContext()} to
  * custom metrics collectors and application code. This metrics-only implementation intentionally does not emit
@@ -860,7 +863,15 @@ public final class OpenTelemetryMetricsCollector implements MetricsCollector {
 		requireNonNull(duration);
 		requireNonNull(throwables);
 
-		Throwable throwable = throwables.isEmpty() ? null : throwables.get(0);
+		Throwable throwable = null;
+		boolean expectedClientError = this.metricNamingStrategy == MetricNamingStrategy.SEMCONV
+				&& marshaledResponse.getStatusCode() >= 400 && marshaledResponse.getStatusCode() < 500;
+		for (Throwable candidate : throwables) {
+			if (expectedClientError && candidate instanceof BadRequestException)
+				continue;
+			throwable = candidate;
+			break;
+		}
 		Attributes attributes = requestAttributes(serverType, request, resourceMethod, marshaledResponse.getStatusCode(), throwable);
 
 		boolean streaming = false;
