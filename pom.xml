@@ -160,7 +160,7 @@
 					<charset>UTF-8</charset>
 					<additionalOptions>
 						<additionalOption>-XDignore.symbol.file</additionalOption>
-						<additionalOption>-Xdoclint:-html</additionalOption>
+						<additionalOption>-Xdoclint:all,-html,-missing</additionalOption>
 					</additionalOptions>
 					<linksource>true</linksource>
 					<show>public</show>

@@ -165,7 +165,7 @@ public final class OpenTelemetryMetricsCollector implements MetricsCollector {
 	@NonNull
 	private static final AttributeKey<String> MCP_SUBSCRIPTION_MAINTENANCE_OUTCOME_ATTRIBUTE_KEY;
 	@NonNull
-	private static final AttributeKey<Long> RPC_JSON_RPC_ERROR_CODE_ATTRIBUTE_KEY;
+	private static final AttributeKey<String> RPC_RESPONSE_STATUS_CODE_ATTRIBUTE_KEY;
 	@NonNull
 	private static final AttributeKey<String> MCP_SHUTDOWN_OUTCOME_ATTRIBUTE_KEY;
 	@NonNull
@@ -207,7 +207,7 @@ public final class OpenTelemetryMetricsCollector implements MetricsCollector {
 				AttributeKey.stringKey("soklet.mcp.subscription.maintenance.work");
 		MCP_SUBSCRIPTION_MAINTENANCE_OUTCOME_ATTRIBUTE_KEY =
 				AttributeKey.stringKey("soklet.mcp.subscription.maintenance.outcome");
-		RPC_JSON_RPC_ERROR_CODE_ATTRIBUTE_KEY = AttributeKey.longKey("rpc.jsonrpc.error_code");
+		RPC_RESPONSE_STATUS_CODE_ATTRIBUTE_KEY = AttributeKey.stringKey("rpc.response.status_code");
 		MCP_SHUTDOWN_OUTCOME_ATTRIBUTE_KEY = AttributeKey.stringKey("soklet.mcp.shutdown.outcome");
 		// OpenTelemetry HTTP semantic conventions express request latencies in seconds.
 		REQUEST_DURATION_BUCKET_BOUNDARIES = List.of(
@@ -792,8 +792,8 @@ public final class OpenTelemetryMetricsCollector implements MetricsCollector {
 			this.mcpKeepAlivesEmittedCounter.add(1);
 		} else if (event instanceof McpMetricsEvent.ProtocolError protocolError) {
 			this.mcpProtocolErrorsCounter.add(1, Attributes.of(
-					RPC_JSON_RPC_ERROR_CODE_ATTRIBUTE_KEY,
-					protocolError.getCode().longValue()));
+					RPC_RESPONSE_STATUS_CODE_ATTRIBUTE_KEY,
+					protocolError.getCode().toString()));
 		} else if (event instanceof McpMetricsEvent.UnknownMirroredHeader unknownMirroredHeader) {
 			this.mcpUnknownMirroredHeadersCounter.add(1, mcpEndpointMethodAttributes(
 					unknownMirroredHeader.getEndpointPath(),
@@ -827,6 +827,7 @@ public final class OpenTelemetryMetricsCollector implements MetricsCollector {
 			case UNEXPECTED_TERMINATION -> "unexpected_termination";
 			case RESIDUAL_ACTIVITY -> "residual_activity";
 			case TERMINATION_UNKNOWN -> "termination_unknown";
+			default -> "termination_unknown";
 		};
 	}
 
@@ -938,6 +939,7 @@ public final class OpenTelemetryMetricsCollector implements MetricsCollector {
 			case COMPLETED, CLIENT_DISCONNECTED, CLIENT_CANCELED, SERVER_STOPPING, APPLICATION_CANCELED -> false;
 			case PROTOCOL_UNSUPPORTED, RESPONSE_TIMEOUT, RESPONSE_IDLE_TIMEOUT, CLEANUP_TIMEOUT,
 					BACKPRESSURE, WRITE_FAILED, PRODUCER_FAILED, INTERNAL_ERROR, SIMULATOR_LIMIT_EXCEEDED, UNKNOWN -> true;
+			default -> true;
 		};
 		if (failure && attributes.get(ERROR_TYPE_ATTRIBUTE_KEY) == null)
 			attributes = attributes.toBuilder().put(ERROR_TYPE_ATTRIBUTE_KEY,

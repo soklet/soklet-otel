@@ -34,6 +34,8 @@ final class ServerTypeAttribute {
 	static final String SSE = "sse";
 	@NonNull
 	static final String MCP = "mcp";
+	@NonNull
+	static final String UNKNOWN = "unknown";
 
 	private ServerTypeAttribute() {}
 
@@ -43,6 +45,7 @@ final class ServerTypeAttribute {
 		return switch (serverType) {
 			case HTTP -> HTTP;
 			case SSE -> SSE;
+			default -> UNKNOWN;
 		};
 	}
 }

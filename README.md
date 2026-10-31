@@ -127,6 +127,11 @@ OpenTelemetryMetricsCollector collector =
   OpenTelemetryMetricsCollector.withMeter(myMeter).build();
 ```
 
+HTTP and SSE parent extraction uses validated W3C `traceparent` and `tracestate` from
+Soklet requests. The SDK's configured propagators are not consulted: B3, Jaeger,
+and X-Ray headers do not supply parents. Configure upstream W3C propagation when
+using this integration. MCP parenting uses validated MCP metadata as described below.
+
 ## Emitted Metrics
 
 HTTP metric names depend on the selected strategy (default: `SEMCONV`):
@@ -141,6 +146,11 @@ HTTP metric names depend on the selected strategy (default: `SEMCONV`):
 Request-body size is encoded payload bytes as transferred with `SEMCONV` (excluding headers
 and transfer framing), or handler-visible bytes with `SOKLET`. Response-body size uses the
 finalized marshaled representation under both strategies, before any later transport gzip.
+
+HTTP requests shed with 503 before handler dispatch create no request span or
+`http.server.request.duration` sample; they increment `soklet.server.requests.rejected`.
+Parser rejections such as 400 and 431 increment `soklet.server.transport.failures`
+without creating handler spans or request-duration samples.
 
 Soklet-specific metrics (all strategies):
 
@@ -206,7 +216,7 @@ MCP metrics in 2.0.0 map all 24 [`McpMetricsEvent`](https://javadoc.soklet.com/c
 | `soklet.mcp.cancelations.signaled` | Counter, `{cancelation}` | `soklet.mcp.endpoint`, `rpc.method` |
 | `soklet.mcp.progress.emitted` | Counter, `{notification}` | `soklet.mcp.endpoint`, `rpc.method` |
 | `soklet.mcp.keepalives.emitted` | Counter, `{comment}` | None |
-| `soklet.mcp.protocol.errors` | Counter, `{error}` | `rpc.jsonrpc.error_code` |
+| `soklet.mcp.protocol.errors` | Counter, `{error}` | `rpc.response.status_code` (decimal string) |
 | `soklet.mcp.unknown.mirrored.headers` | Counter, `{header}` | `soklet.mcp.endpoint`, `rpc.method` |
 | `soklet.mcp.handler.executions.active` | Up-down counter, `{handler}` | None |
 | `soklet.mcp.handler.queue.depth` | Up-down counter, `{request}` | None |
@@ -278,7 +288,7 @@ Common attributes:
 - `soklet.mcp.subscription.termination.reason`
 - `soklet.mcp.subscription.maintenance.work`
 - `soklet.mcp.subscription.maintenance.outcome`
-- `rpc.jsonrpc.error_code`
+- `rpc.response.status_code` (decimal string)
 - `soklet.mcp.shutdown.outcome`
 
 Request decompression failures use `soklet.failure.reason=request_body_decompression_failed`.
@@ -303,6 +313,18 @@ Request decompression failures use `soklet.failure.reason=request_body_decompres
 
 ## Emitted Spans
 
+Finite HTTP spans start when this observer receives `didStartRequestHandling`
+and end when it receives `didFinishRequestHandling`. They exclude work in
+`RequestInterceptor.wrapRequest` before dispatch reaches the start callback,
+and work after the finish callback. A slow observer placed earlier in the
+composed start callback is also outside that span. The request-duration metric
+uses Soklet's supplied monotonic duration and can cover a different interval.
+
+The core's public enum vocabularies may grow in 4.x. Unrecognized server types
+use `soklet.server.type=unknown`; unrecognized shutdown dispositions use
+`termination_unknown`. Unrecognized request outcomes and stream termination
+reasons are recorded as errors while still completing spans and metrics.
+
 [`OpenTelemetryLifecycleObserver`](https://otel.javadoc.soklet.com/com/soklet/otel/OpenTelemetryLifecycleObserver.html) creates `SERVER` spans for:
 
 - Standard HTTP requests.
@@ -314,7 +336,11 @@ Request decompression failures use `soklet.failure.reason=request_body_decompres
 For HTTP and SSE, inbound W3C `traceparent` / `tracestate` headers parsed by
 [`Request::getTraceContext`](<https://javadoc.soklet.com/com/soklet/Request.html#getTraceContext()>) are used as
 the remote parent. Malformed or absent trace context produces a root span. Long-lived SSE spans may not appear
-in some tracing backends until the stream ends.
+in some tracing backends until the stream ends. With both request and SSE-connection
+span policies enabled, an accepted SSE handshake creates two SERVER spans. They share
+the inbound parent when one exists; without valid inbound context they are separate
+root traces. `recordRequestId(true)` permits attribute correlation, but does not link
+the traces.
 
 HTTP spans correlate by the original per-dispatch `Request` instance, never by its caller-configurable
 ID. The simulator makes a dispatch copy so concurrent reuse of one input request is safe.
@@ -342,6 +368,11 @@ the current OpenTelemetry `Context`, a link, or baggage.
 `SpanPolicy.recordMcpRequestSpans()` defaults to `true` when an application installs the observer. One span
 starts at admitted semantic handling and ends at the supplied client-visible terminal duration. Preadmission
 failures do not create a span, and no separate MCP session, request-stream, or subscription span is emitted.
+
+Built-in request contexts supply [`getStartedAt()`](<https://javadoc.soklet.com/com/soklet/McpRequestContext.html#getStartedAt()>)
+from before the start observers run. The span uses that origin plus the semantic terminal duration, keeping
+slow start observers inside the measured interval and asynchronous finish-delivery delay outside it.
+Custom or manually created contexts whose default accessor returns empty retain the callback-time start fallback.
 
 The default span name is `MCP <method>`. The built-in name and `rpc.method` use exactly these live bounded
 methods: `initialize`, `notifications/initialized`, `ping`, `resources/subscribe`, `resources/unsubscribe`,
@@ -401,6 +432,10 @@ including `SEMCONV`. Request-handling and response-write metrics (including
 `soklet.server.request.throwables`) carry `soklet.server.type` only under `SOKLET`.
 Standard HTTP instrument names, semantic-convention attributes, and `url.scheme=http`
 are unchanged; this migration adds no attributes to metrics that omit them.
+
+The MCP protocol-error counter now uses decimal-string `rpc.response.status_code`,
+matching MCP spans, in place of long-valued `rpc.jsonrpc.error_code`. Update metric
+queries and attribute-type expectations when upgrading to 2.0.0.
 
 ## MCP telemetry integration
 

@@ -59,6 +59,7 @@ import java.lang.reflect.Proxy;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
@@ -120,6 +121,29 @@ public class OpenTelemetryMcpLifecycleObserverTests {
 			AttributeKey.stringKey("client.address");
 	private static final AttributeKey<String> REQUEST_ID_ATTRIBUTE_KEY =
 			AttributeKey.stringKey("soklet.request.id");
+
+	@Test
+	public void manualContextWithoutSemanticStartRetainsCallbackTimeFallback() {
+		TestHarness harness = TestHarness.create();
+		try (OpenTelemetryLifecycleObserver observer = observer(harness)) {
+			McpRequestContext context = context(RECOGNIZED_METHOD,
+					physicalRequest("manual-start", null), Optional.empty()).context();
+			Assertions.assertTrue(context.getStartedAt().isEmpty());
+			Instant before = Instant.now();
+			observer.didStartMcpRequestHandling(context);
+			Instant after = Instant.now();
+			observer.didFinishMcpRequestHandling(context, McpRequestOutcome.COMPLETE,
+					null, Duration.ofMillis(7), List.of());
+			SpanData span = onlySpan(harness);
+			Assertions.assertTrue(span.getStartEpochNanos() >= epochNanos(before));
+			Assertions.assertTrue(span.getStartEpochNanos() <= epochNanos(after));
+			Assertions.assertEquals(Duration.ofMillis(7).toNanos(), span.getEndEpochNanos() - span.getStartEpochNanos());
+		}
+	}
+
+	private static long epochNanos(Instant instant) {
+		return instant.getEpochSecond() * 1_000_000_000L + instant.getNano();
+	}
 
 	@Test
 	public void mcpMetadataTraceContextIsTheOnlyRemoteParentAndPreservesTraceState() {
@@ -714,6 +738,7 @@ public class OpenTelemetryMcpLifecycleObserverTests {
 			accessedMethods.add(methodName);
 			return switch (methodName) {
 				case "getRequest" -> request;
+				case "getStartedAt" -> InvocationHandler.invokeDefault(proxy, method);
 				case "getEndpoint" -> ENDPOINT;
 				case "getEndpointPathParameters" ->
 						Map.of("tenant", "endpoint-path-parameter-canary");

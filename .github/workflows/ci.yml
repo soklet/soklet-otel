@@ -57,6 +57,11 @@ jobs:
       - name: Verify pinned Javadoc indexes
         run: node soklet-otel/scripts/verify-javadoc-links.mjs
 
+      - name: Verify forward-compatible evolutionary enum switches
+        run: >-
+          python3 soklet-otel/scripts/verify-evolution-switches.py
+          --core-directory soklet --project-directory soklet-otel
+
       - name: Test candidate verification
         run: python3 -m unittest discover -s soklet-otel/scripts -p 'test_*.py'
 

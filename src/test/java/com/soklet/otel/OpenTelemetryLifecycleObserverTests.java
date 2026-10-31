@@ -86,6 +86,22 @@ import static java.util.Objects.requireNonNull;
  */
 public class OpenTelemetryLifecycleObserverTests {
 	@Test
+	public void finiteHttpSpanEndsAtFinishCallbackRatherThanAddingPreObserverDuration() {
+		TestHarness harness = TestHarness.create();
+		try (var observer = OpenTelemetryLifecycleObserver.withOpenTelemetry(harness.openTelemetrySdk()).build()) {
+			Request request = Request.fromPath(HttpMethod.GET, "/timing");
+			observer.didStartRequestHandling(ServerType.HTTP, request, null);
+			Instant beforeFinish = Instant.now();
+			observer.didFinishRequestHandling(ServerType.HTTP, request, null,
+					MarshaledResponse.fromStatusCode(200), Duration.ofSeconds(30), List.of());
+			Instant afterFinish = Instant.now();
+			Instant endedAt = Instant.ofEpochSecond(0, onlySpan(harness).getEndEpochNanos());
+			Assertions.assertFalse(endedAt.isBefore(beforeFinish));
+			Assertions.assertFalse(endedAt.isAfter(afterFinish));
+		} finally { harness.openTelemetrySdk().close(); }
+	}
+
+	@Test
 	public void overflowingHttpStreamTimestampStillEndsSpanInBothCallbackOrders() {
 		for (boolean terminalFirst : List.of(false, true)) {
 			TestHarness harness = TestHarness.create();

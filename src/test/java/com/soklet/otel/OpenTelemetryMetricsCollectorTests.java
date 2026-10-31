@@ -344,7 +344,7 @@ public class OpenTelemetryMetricsCollectorTests {
 	private static final AttributeKey<String> MCP_SUBSCRIPTION_TERMINATION_REASON_ATTRIBUTE_KEY = AttributeKey.stringKey("soklet.mcp.subscription.termination.reason");
 	private static final AttributeKey<String> MCP_SUBSCRIPTION_MAINTENANCE_WORK_ATTRIBUTE_KEY = AttributeKey.stringKey("soklet.mcp.subscription.maintenance.work");
 	private static final AttributeKey<String> MCP_SUBSCRIPTION_MAINTENANCE_OUTCOME_ATTRIBUTE_KEY = AttributeKey.stringKey("soklet.mcp.subscription.maintenance.outcome");
-	private static final AttributeKey<Long> MCP_PROTOCOL_ERROR_CODE_ATTRIBUTE_KEY = AttributeKey.longKey("rpc.jsonrpc.error_code");
+	private static final AttributeKey<String> MCP_PROTOCOL_ERROR_CODE_ATTRIBUTE_KEY = AttributeKey.stringKey("rpc.response.status_code");
 	private static final AttributeKey<String> MCP_SHUTDOWN_OUTCOME_ATTRIBUTE_KEY = AttributeKey.stringKey("soklet.mcp.shutdown.outcome");
 	private static final Set<String> MCP_SHUTDOWN_OUTCOMES = Set.of(
 			"not_started", "graceful_termination", "forced_termination",
@@ -992,11 +992,11 @@ public class OpenTelemetryMetricsCollectorTests {
 				stringAttributeValues(metrics, "soklet.mcp.shutdowns",
 						MCP_SHUTDOWN_OUTCOME_ATTRIBUTE_KEY));
 
-		Set<Long> expectedCodes = liveCodes.stream().map(Integer::longValue)
+		Set<String> expectedCodes = liveCodes.stream().map(Object::toString)
 				.collect(Collectors.toCollection(LinkedHashSet::new));
-		expectedCodes.add(123456L);
+		expectedCodes.add("123456");
 		Assertions.assertEquals(expectedCodes,
-				longAttributeValues(metrics, "soklet.mcp.protocol.errors",
+				stringAttributeValues(metrics, "soklet.mcp.protocol.errors",
 						MCP_PROTOCOL_ERROR_CODE_ATTRIBUTE_KEY));
 		Assertions.assertEquals(Set.of("/manual-endpoint"),
 				stringAttributeValues(metrics, "soklet.mcp.unknown.mirrored.headers",
@@ -1523,7 +1523,7 @@ public class OpenTelemetryMetricsCollectorTests {
 		attributes.put("soklet.mcp.cancelations.signaled", endpointMethod);
 		attributes.put("soklet.mcp.progress.emitted", endpointMethod);
 		attributes.put("soklet.mcp.keepalives.emitted", none);
-		attributes.put("soklet.mcp.protocol.errors", Set.of("rpc.jsonrpc.error_code"));
+		attributes.put("soklet.mcp.protocol.errors", Set.of("rpc.response.status_code"));
 		attributes.put("soklet.mcp.unknown.mirrored.headers", endpointMethod);
 		attributes.put("soklet.mcp.handler.executions.active", none);
 		attributes.put("soklet.mcp.handler.queue.depth", none);

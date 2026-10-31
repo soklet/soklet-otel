@@ -308,6 +308,7 @@ public final class OpenTelemetryLifecycleObserver implements LifecycleObserver, 
 		if (this.closed.get() || !this.spanPolicy.recordHttpRequestSpans())
 			return;
 
+		Instant finishedAt = Instant.now();
 		IdentityKey<Request> key = new IdentityKey<>(request);
 		SpanState spanState = this.httpRequestSpans.get(key);
 
@@ -330,7 +331,7 @@ public final class OpenTelemetryLifecycleObserver implements LifecycleObserver, 
 						finishHttpStream(key, spanState, spanState.pendingHttpStreamTermination,
 								requireNonNull(spanState.httpStreamFinishedAt));
 					} else if (!keepOpen && this.httpRequestSpans.remove(key, spanState)) {
-						endSpanSafely(spanState.span(), spanState.startedAt(), duration);
+						endSpanSafely(spanState.span(), finishedAt);
 					}
 				}
 			}
@@ -345,7 +346,7 @@ public final class OpenTelemetryLifecycleObserver implements LifecycleObserver, 
 			return;
 
 		safelyRun(() -> {
-			Instant startedAt = Instant.now();
+			Instant startedAt = context.getStartedAt().orElseGet(Instant::now);
 			Span span = this.tracer.spanBuilder(this.spanNamingStrategy.mcpRequestSpanName(context))
 					.setSpanKind(SpanKind.SERVER)
 					.setParent(parentContextFor(context.getTraceContext().orElse(null)))
@@ -677,6 +678,7 @@ public final class OpenTelemetryLifecycleObserver implements LifecycleObserver, 
 			case COMPLETE, INPUT_REQUIRED, CANCELED, CLIENT_DISCONNECTED -> false;
 			case REJECTED, APPLICATION_ERROR, PROTOCOL_ERROR, INTERNAL_ERROR,
 					 DEADLINE_EXCEEDED, WRITE_FAILED -> true;
+			default -> true;
 		};
 	}
 
@@ -724,6 +726,7 @@ public final class OpenTelemetryLifecycleObserver implements LifecycleObserver, 
 			case COMPLETED, CLIENT_DISCONNECTED, CLIENT_CANCELED, SERVER_STOPPING, APPLICATION_CANCELED -> false;
 			case PROTOCOL_UNSUPPORTED, RESPONSE_TIMEOUT, RESPONSE_IDLE_TIMEOUT, CLEANUP_TIMEOUT, BACKPRESSURE, WRITE_FAILED,
 					 PRODUCER_FAILED, INTERNAL_ERROR, SIMULATOR_LIMIT_EXCEEDED, UNKNOWN -> true;
+			default -> true;
 		};
 	}
 
