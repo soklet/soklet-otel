@@ -117,13 +117,16 @@ public class OpenTelemetryHttpProtocolRejectionTests {
 								.streamingResponseBody(StreamingResponseBody.fromWriter(stream -> Assertions.fail("Rejected writer entered"))).build());
 					}
 				};
-				try (Soklet soklet = Soklet.fromConfig(SokletConfig.withHttpServer(HttpServer.withPort(port).host("127.0.0.1")
+				Soklet soklet = Soklet.run(SokletConfig.withHttpServer(HttpServer.withPort(port).host("127.0.0.1")
 						.concurrency(1).streamingResponseTimeout(Duration.ofSeconds(5)).build())
 						.resourceMethodResolver(ResourceMethodResolver.fromClasses(Set.of(HealthResource.class)))
 						.requestInterceptor(interceptor).lifecycleObserver(controlledObserver)
 						.lifecyclePolicy(LifecyclePolicy.builder().gracefulShutdownTimeout(Duration.ofSeconds(1))
-								.forcedShutdownTimeout(Duration.ofSeconds(1)).build()).build())) {
-					soklet.start();
+								.forcedShutdownTimeout(Duration.ofSeconds(1)).build()).build());
+				try (@SuppressWarnings("try") AutoCloseable sokletShutdown = () -> {
+					soklet.requestShutdown();
+					soklet.awaitShutdownAsync().toCompletableFuture().join();
+				}) {
 					try (Socket socket = new Socket("127.0.0.1", port)) {
 						socket.setSoTimeout(3_000);
 						socket.getOutputStream().write("GET /stream HTTP/1.0\r\n\r\n".getBytes(StandardCharsets.ISO_8859_1));

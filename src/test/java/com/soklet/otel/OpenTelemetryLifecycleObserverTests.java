@@ -364,7 +364,7 @@ public class OpenTelemetryLifecycleObserverTests {
 					.streamingResponseTimeout(Duration.ZERO).streamingResponseIdleTimeout(Duration.ZERO)
 					.streamingExecutorServiceSupplier(() -> new ThreadPoolExecutor(1, 1, 0L, TimeUnit.MILLISECONDS,
 							new SynchronousQueue<>(), new ThreadPoolExecutor.AbortPolicy())).build();
-			Soklet soklet = Soklet.fromConfig(SokletConfig.withHttpServer(server)
+			Soklet soklet = Soklet.run(SokletConfig.withHttpServer(server)
 					.resourceMethodResolver(ResourceMethodResolver.fromClasses(Set.of(RejectionHealthResource.class)))
 					.requestInterceptor(new RequestInterceptor() {
 						@Override
@@ -380,7 +380,6 @@ public class OpenTelemetryLifecycleObserverTests {
 					}).lifecycleObserver(observer).lifecyclePolicy(LifecyclePolicy.builder()
 							.gracefulShutdownTimeout(Duration.ofSeconds(1)).forcedShutdownTimeout(Duration.ofSeconds(1)).build()).build());
 			try {
-				soklet.start();
 				try (Socket held = openStreamRequest(port, "/held")) {
 					Assertions.assertTrue(heldProducerEntered.await(3, TimeUnit.SECONDS));
 					try (Socket rejected = openStreamRequest(port, "/rejected")) {
@@ -400,7 +399,9 @@ public class OpenTelemetryLifecycleObserverTests {
 				awaitSpanCount(observer, 0);
 				awaitExportedSpanCount(harness, 2);
 			} finally {
-				releaseHeldProducer.countDown(); soklet.close();
+				releaseHeldProducer.countDown();
+				soklet.requestShutdown();
+				soklet.awaitShutdownAsync().toCompletableFuture().join();
 			}
 			Assertions.assertEquals(0, observer.getActiveSpanCount());
 			Assertions.assertEquals(2, harness.spanExporter().getFinishedSpanItems().size(), "Duplicate or missing stream span");

@@ -208,35 +208,39 @@ public class OpenTelemetryRequestReplacementTests {
 		};
 
 		try (OpenTelemetrySdk sdk = sdk(exporter);
-			 OpenTelemetryLifecycleObserver observer = OpenTelemetryLifecycleObserver.fromOpenTelemetry(sdk);
-			 Soklet soklet = Soklet.fromConfig(SokletConfig.withHttpServer(HttpServer.withPort(port).host("127.0.0.1").build())
+			 OpenTelemetryLifecycleObserver observer = OpenTelemetryLifecycleObserver.fromOpenTelemetry(sdk)) {
+			Soklet soklet = Soklet.run(SokletConfig.withHttpServer(HttpServer.withPort(port).host("127.0.0.1").build())
 					.resourceMethodResolver(ResourceMethodResolver.fromClasses(Set.of(Resource.class)))
 					.requestInterceptor(replacingInterceptor(true, "/stream", null, null))
-					.lifecycleObservers(List.of(finishGate, observer, order)).build())) {
-			soklet.start();
-			HttpURLConnection connection = (HttpURLConnection) new URL("http://127.0.0.1:" + port + "/original").openConnection();
-			connection.setConnectTimeout(2_000);
-			connection.setReadTimeout(5_000);
-			connection.setRequestProperty("traceparent", TRACEPARENT);
-			try {
-				Assertions.assertEquals(200, connection.getResponseCode());
-				try (var body = connection.getInputStream()) {
-					Assertions.assertEquals("effective", new String(body.readAllBytes(), StandardCharsets.UTF_8));
+					.lifecycleObservers(List.of(finishGate, observer, order)).build());
+			try (@SuppressWarnings("try") AutoCloseable sokletShutdown = () -> {
+				soklet.requestShutdown();
+				soklet.awaitShutdownAsync().toCompletableFuture().join();
+			}) {
+				HttpURLConnection connection = (HttpURLConnection) new URL("http://127.0.0.1:" + port + "/original").openConnection();
+				connection.setConnectTimeout(2_000);
+				connection.setReadTimeout(5_000);
+				connection.setRequestProperty("traceparent", TRACEPARENT);
+				try {
+					Assertions.assertEquals(200, connection.getResponseCode());
+					try (var body = connection.getInputStream()) {
+						Assertions.assertEquals("effective", new String(body.readAllBytes(), StandardCharsets.UTF_8));
+					}
+					Assertions.assertTrue(finished.await(5, TimeUnit.SECONDS));
+					Assertions.assertNull(observationFailure.get());
+					Assertions.assertTrue(terminalBeforeFinish.get());
+					Assertions.assertSame(startedRequest.get(), finishedRequest.get());
+					Assertions.assertSame(startedRequest.get(), streamRequest.get());
+					Assertions.assertEquals(0, observer.getActiveSpanCount());
+					Assertions.assertEquals(1, exporter.getFinishedSpanItems().size());
+					SpanData span = exporter.getFinishedSpanItems().get(0);
+					Assertions.assertEquals("GET /stream", span.getName());
+					Assertions.assertEquals(200L, span.getAttributes().get(AttributeKey.longKey("http.response.status_code")));
+					Assertions.assertEquals("completed", span.getAttributes().get(AttributeKey.stringKey("soklet.stream.termination.reason")));
+					Assertions.assertEquals("b7ad6b7169203331", span.getParentSpanId());
+				} finally {
+					connection.disconnect();
 				}
-				Assertions.assertTrue(finished.await(5, TimeUnit.SECONDS));
-				Assertions.assertNull(observationFailure.get());
-				Assertions.assertTrue(terminalBeforeFinish.get());
-				Assertions.assertSame(startedRequest.get(), finishedRequest.get());
-				Assertions.assertSame(startedRequest.get(), streamRequest.get());
-				Assertions.assertEquals(0, observer.getActiveSpanCount());
-				Assertions.assertEquals(1, exporter.getFinishedSpanItems().size());
-				SpanData span = exporter.getFinishedSpanItems().get(0);
-				Assertions.assertEquals("GET /stream", span.getName());
-				Assertions.assertEquals(200L, span.getAttributes().get(AttributeKey.longKey("http.response.status_code")));
-				Assertions.assertEquals("completed", span.getAttributes().get(AttributeKey.stringKey("soklet.stream.termination.reason")));
-				Assertions.assertEquals("b7ad6b7169203331", span.getParentSpanId());
-			} finally {
-				connection.disconnect();
 			}
 		}
 	}
